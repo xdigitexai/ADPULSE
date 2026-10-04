@@ -5,7 +5,7 @@ import { all, one, run, id, addLedger, db, balanceFor } from './db.js';
 import { hashIp, deviceFromUA, scoreEvent } from './fraud.js';
 import { getFrequency, cacheFrequency, writeAdEvent } from './production-store.js';
 import { enrichIp } from './ip-intelligence.js';
-import { audienceFor, interestMatchScore } from './audience-engine.js';
+import { audienceFor, interestMatchScore, updateAudienceSignal } from './audience-engine.js';
 
 const json = (s) => { try{return JSON.parse(s||'[]')}catch{return []} };
 const today = () => new Date().toISOString().slice(0,10);
@@ -69,7 +69,7 @@ export async function makeAdRequest({zoneKey,ip,userAgent,country,contextToken='
     [eventId,requestId,'request',campaign?.id||null,zone.publisher_id,zone.site_id,zone.id,ipHash,userAgent,country||null,device,JSON.stringify({context})]);
   void writeAdEvent({id:eventId,request_id:requestId,event_type:'request',campaign_id:campaign?.id||'',publisher_id:zone.publisher_id,site_id:zone.site_id,zone_id:zone.id,ip_hash:ipHash,country:country||'',device,risk_score:0,valid:1,bill_amount:0,publisher_amount:0}).catch(()=>{});
   if(!campaign) return {noFill:true,reason:'no_campaign',requestId};
-  const token=signEvent({requestId,campaignId:campaign.id,publisherId:zone.publisher_id,siteId:zone.site_id,zoneId:zone.id,ipHash});
+  const token=signEvent({requestId,campaignId:campaign.id,publisherId:zone.publisher_id,siteId:zone.site_id,zoneId:zone.id,ipHash,contextCategory:context.category||'',contextTopics:context.topics||[]});
   return {
     noFill:false,requestId,token,
     creative:{headline:campaign.headline,description:campaign.description,imageUrl:campaign.image_url,videoUrl:campaign.video_url,creativeType:campaign.creative_type||'display',destinationUrl:campaign.destination_url,width:zone.width,height:zone.height,format:zone.format},
@@ -107,7 +107,14 @@ export async function recordEvent({token,eventType,ip,userAgent,metadata={}}){
     }
   });
   tx();
-  if(valid && eventType==='view') void cacheFrequency({campaignId:campaign.id,ipHash}).catch(()=>{});
+  if(valid && eventType==='view'){
+    void cacheFrequency({campaignId:campaign.id,ipHash}).catch(()=>{});
+    updateAudienceSignal({browserId,sessionId,category:signed.contextCategory||'',topics:signed.contextTopics||[],personalizationAllowed:false,weight:.04});
+  }
+  if(valid && eventType==='click'){
+    const personalizationAllowed=metadata.personalizationAllowed===true;
+    updateAudienceSignal({browserId,sessionId,category:signed.contextCategory||'',topics:signed.contextTopics||[],personalizationAllowed,weight:.20});
+  }
   void writeAdEvent({id:eventId,request_id:signed.requestId,event_type:eventType,campaign_id:signed.campaignId,publisher_id:signed.publisherId,site_id:signed.siteId,zone_id:signed.zoneId,ip_hash:ipHash,country:metadata.country||'',device:deviceFromUA(userAgent),risk_score:fraud.score,valid:valid?1:0,bill_amount:valid?bill:0,publisher_amount:publisherAmount}).catch(()=>{});
   return {eventId,valid,riskScore:fraud.score,reasons:fraud.reasons,network:intel,billAmount:valid?bill:0,publisherAmount};
 }
