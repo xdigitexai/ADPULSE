@@ -96,6 +96,8 @@ CREATE TABLE IF NOT EXISTS ad_events (
   user_agent TEXT,
   country TEXT,
   device TEXT,
+  browser_id TEXT,
+  session_id TEXT,
   risk_score REAL NOT NULL DEFAULT 0,
   valid INTEGER NOT NULL DEFAULT 1,
   bill_amount REAL NOT NULL DEFAULT 0,
@@ -106,6 +108,8 @@ CREATE TABLE IF NOT EXISTS ad_events (
 CREATE INDEX IF NOT EXISTS idx_events_campaign ON ad_events(campaign_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_events_publisher ON ad_events(publisher_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_events_request ON ad_events(request_id);
+CREATE INDEX IF NOT EXISTS idx_events_browser ON ad_events(browser_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_events_ip_campaign ON ad_events(ip_hash, campaign_id, created_at);
 CREATE TABLE IF NOT EXISTS ledger_entries (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id),
@@ -213,6 +217,8 @@ if(!hasColumn('campaigns','conversion_window_days')) db.exec("ALTER TABLE campai
 if(!hasColumn('campaigns','public_key')) db.exec("ALTER TABLE campaigns ADD COLUMN public_key TEXT");
 if(!hasColumn('campaigns','video_url')) db.exec("ALTER TABLE campaigns ADD COLUMN video_url TEXT");
 if(!hasColumn('campaigns','creative_type')) db.exec("ALTER TABLE campaigns ADD COLUMN creative_type TEXT NOT NULL DEFAULT 'display'");
+if(!hasColumn('ad_events','browser_id')) db.exec("ALTER TABLE ad_events ADD COLUMN browser_id TEXT");
+if(!hasColumn('ad_events','session_id')) db.exec("ALTER TABLE ad_events ADD COLUMN session_id TEXT");
 if(!hasColumn('support_conversations','access_token')) db.exec("ALTER TABLE support_conversations ADD COLUMN access_token TEXT");
 
 for(const row of db.prepare("SELECT id FROM campaigns WHERE public_key IS NULL OR public_key='' ").all()){
@@ -233,6 +239,10 @@ export function balanceFor(userId,currency='USD') {
 
 export function balancesFor(userId){
   return all('SELECT currency,ROUND(COALESCE(SUM(amount),0),6) balance FROM ledger_entries WHERE user_id=? AND status IN ("finalized","available") GROUP BY currency ORDER BY currency',[userId]);
+}
+
+export function finalizeMaturePublisherEarnings(){
+  return run("UPDATE ledger_entries SET status='available' WHERE type='PUBLISHER_EARNING' AND status='pending' AND created_at<=datetime('now','-24 hours')").changes;
 }
 
 export function addLedger({userId,eventId=null,type,amount,currency='USD',status='finalized',note=null}) {
