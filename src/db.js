@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS users (
   kyc_status TEXT NOT NULL DEFAULT 'not_started',
   phone TEXT,
   country TEXT,
+  google_sub TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS account_ip_history (
@@ -254,6 +255,7 @@ if(!hasColumn('campaigns','conversion_window_days')) db.exec("ALTER TABLE campai
 if(!hasColumn('campaigns','public_key')) db.exec("ALTER TABLE campaigns ADD COLUMN public_key TEXT");
 if(!hasColumn('campaigns','video_url')) db.exec("ALTER TABLE campaigns ADD COLUMN video_url TEXT");
 if(!hasColumn('campaigns','creative_type')) db.exec("ALTER TABLE campaigns ADD COLUMN creative_type TEXT NOT NULL DEFAULT 'display'");
+if(!hasColumn('users','google_sub')) db.exec("ALTER TABLE users ADD COLUMN google_sub TEXT");
 if(!hasColumn('zones','refresh_enabled')) db.exec("ALTER TABLE zones ADD COLUMN refresh_enabled INTEGER NOT NULL DEFAULT 0");
 if(!hasColumn('zones','refresh_interval_seconds')) db.exec("ALTER TABLE zones ADD COLUMN refresh_interval_seconds INTEGER NOT NULL DEFAULT 45");
 if(!hasColumn('zones','refresh_max')) db.exec("ALTER TABLE zones ADD COLUMN refresh_max INTEGER NOT NULL DEFAULT 3");
