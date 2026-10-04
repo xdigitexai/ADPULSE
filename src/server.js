@@ -111,8 +111,7 @@ app.post('/api/publisher/sites',auth('publisher'),(req,res)=>{
 app.post('/api/publisher/sites/:id/verify',auth('publisher'),wrap(async(req,res)=>{
   const site=one('SELECT * FROM sites WHERE id=?',[req.params.id]); requireOwner(site,req.user.id,'publisher_id');
   const method=req.body.method||'meta'; let verified=false, detail='';
-  try{
-    if(method==='meta'){
+  if(method==='meta'){
       const r=await fetchPublisherPath(site.domain,'/',{headers:{'user-agent':'ADPulseVerifier/1.0'}});
       const html=await r.text(); verified=html.includes(site.verification_token); detail='meta';
     }else if(method==='file'){
@@ -125,7 +124,6 @@ app.post('/api/publisher/sites/:id/verify',auth('publisher'),wrap(async(req,res)
     }else{
       return res.status(400).json({error:'Unsupported verification method'});
     }
-  }
   if(verified) run("UPDATE sites SET status='pending_review',verification_method=? WHERE id=?",[method,site.id]);
   res.json({verified,status:verified?'pending_review':'pending_verification',method:detail});
 }));
