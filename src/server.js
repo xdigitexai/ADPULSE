@@ -30,6 +30,7 @@ app.use('/api',async(req,res,next)=>{try{await limiter.consume(req.ip);next()}ca
 const wrap=(fn)=>(req,res,next)=>Promise.resolve(fn(req,res,next)).catch(next);
 const normalizeDomain=(raw)=>new URL(raw.match(/^https?:\/\//)?raw:`https://${raw}`).hostname.toLowerCase().replace(/^www\./,'');
 const requireOwner=(row,userId,field)=>{ if(!row || (row[field]!==userId)) throw Object.assign(new Error('Not found'),{status:404}); };
+const AD_FORMATS={responsive:[null,null],'300x250':[300,250],'336x280':[336,280],'728x90':[728,90],'970x250':[970,250],'320x50':[320,50],'320x100':[320,100],'300x600':[300,600],'160x600':[160,600],'native':[null,null],'video':[640,360]};
 
 app.get('/api/health',(req,res)=>res.json({ok:true,service:'adpulse',version:'0.3.0',stores:productionStatus()}));
 app.get('/payment-return',(req,res)=>res.redirect('/?payment=return'));
@@ -130,11 +131,12 @@ app.post('/api/publisher/sites/:id/verify',auth('publisher'),wrap(async(req,res)
 app.get('/api/publisher/sites',auth('publisher'),(req,res)=>res.json(all('SELECT * FROM sites WHERE publisher_id=? ORDER BY created_at DESC',[req.user.id])));
 
 app.post('/api/publisher/zones',auth('publisher'),(req,res)=>{
-  const schema=z.object({siteId:z.string(),name:z.string().min(2),format:z.string().default('responsive'),width:z.number().int().positive().optional(),height:z.number().int().positive().optional(),floorCpm:z.number().min(0).default(0)});
+  const schema=z.object({siteId:z.string(),name:z.string().min(2),format:z.enum(['responsive','300x250','336x280','728x90','970x250','320x50','320x100','300x600','160x600','native','video']).default('responsive'),floorCpm:z.number().min(0).default(0)});
   const d=schema.parse(req.body), site=one('SELECT * FROM sites WHERE id=?',[d.siteId]); requireOwner(site,req.user.id,'publisher_id');
   if(site.status!=='approved') return res.status(400).json({error:'Site must be approved before creating live zones'});
   const zone={id:id('zone'),publicKey:`z_${crypto.randomBytes(10).toString('hex')}`};
-  run('INSERT INTO zones(id,site_id,publisher_id,name,format,width,height,floor_cpm,public_key) VALUES(?,?,?,?,?,?,?,?,?)',[zone.id,site.id,req.user.id,d.name,d.format,d.width||null,d.height||null,d.floorCpm,zone.publicKey]);
+  const [width,height]=AD_FORMATS[d.format];
+  run('INSERT INTO zones(id,site_id,publisher_id,name,format,width,height,floor_cpm,public_key) VALUES(?,?,?,?,?,?,?,?,?)',[zone.id,site.id,req.user.id,d.name,d.format,width,height,d.floorCpm,zone.publicKey]);
   res.status(201).json({...zone,embed:`<div class="adpulse-ad" data-zone="${zone.publicKey}"></div><script async src="${config.appUrl}/adpulse.js"></script>`});
 });
 
@@ -157,7 +159,7 @@ app.post('/api/publisher/sites/:id/verify-ads-txt',auth('publisher'),wrap(async(
 
 app.post('/api/advertiser/campaigns',auth('advertiser'),(req,res)=>{
   const schema=z.object({
-    name:z.string().min(2),destinationUrl:z.string().url(),headline:z.string().min(2).max(120),description:z.string().max(240).optional().default(''),imageUrl:z.string().url().optional().or(z.literal('')),
+    name:z.string().min(2),destinationUrl:z.string().url(),headline:z.string().min(2).max(120),description:z.string().max(240).optional().default(''),imageUrl:z.string().url().optional().or(z.literal('')),videoUrl:z.string().url().optional().or(z.literal('')),creativeType:z.enum(['display','native','video']).default('display'),
     model:z.enum(['CPM','CPC','HYBRID']),currency:z.enum(['KES','CDF','UGX','XOF','XAF','RWF','ZMW','SLE','USD']).default('USD'),cpm:z.number().min(0).default(0),cpc:z.number().min(0).default(0),budgetTotal:z.number().positive(),budgetDaily:z.number().positive(),frequencyCapDaily:z.number().int().min(1).max(50).default(3),conversionWindowDays:z.number().int().min(1).max(30).default(7),startsAt:z.string().optional(),endsAt:z.string().optional(),
     countries:z.array(z.string()).default([]),categories:z.array(z.string()).default([]),devices:z.array(z.string()).default([])
   });
@@ -165,9 +167,9 @@ app.post('/api/advertiser/campaigns',auth('advertiser'),(req,res)=>{
   if(d.model!=='CPC' && d.cpm<=0) return res.status(400).json({error:'CPM must be greater than zero'});
   if(d.model!=='CPM' && d.cpc<=0) return res.status(400).json({error:'CPC must be greater than zero'});
   const cid=id('cmp'), publicKey=`cmp_${crypto.randomBytes(12).toString('hex')}`;
-  run(`INSERT INTO campaigns(id,advertiser_id,name,destination_url,headline,description,image_url,model,cpm,cpc,budget_total,budget_daily,currency,target_countries,target_categories,target_devices,status,frequency_cap_daily,conversion_window_days,starts_at,ends_at,public_key)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending_review',?,?,?,?,?)`,
-    [cid,req.user.id,d.name,d.destinationUrl,d.headline,d.description,d.imageUrl||null,d.model,d.cpm,d.cpc,d.budgetTotal,d.budgetDaily,d.currency,JSON.stringify(d.countries),JSON.stringify(d.categories),JSON.stringify(d.devices),d.frequencyCapDaily,d.conversionWindowDays,d.startsAt||null,d.endsAt||null,publicKey]);
+  run(`INSERT INTO campaigns(id,advertiser_id,name,destination_url,headline,description,image_url,video_url,creative_type,model,cpm,cpc,budget_total,budget_daily,currency,target_countries,target_categories,target_devices,status,frequency_cap_daily,conversion_window_days,starts_at,ends_at,public_key)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending_review',?,?,?,?,?)`,
+    [cid,req.user.id,d.name,d.destinationUrl,d.headline,d.description,d.imageUrl||null,d.videoUrl||null,d.creativeType,d.model,d.cpm,d.cpc,d.budgetTotal,d.budgetDaily,d.currency,JSON.stringify(d.countries),JSON.stringify(d.categories),JSON.stringify(d.devices),d.frequencyCapDaily,d.conversionWindowDays,d.startsAt||null,d.endsAt||null,publicKey]);
   res.status(201).json(one('SELECT * FROM campaigns WHERE id=?',[cid]));
 });
 
