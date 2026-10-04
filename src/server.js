@@ -70,12 +70,25 @@ app.get('/api/dashboard',auth(),(req,res)=>{
   });
 });
 
+app.get('/sellers.json',(req,res)=>{
+  const sellers=all("SELECT DISTINCT u.id,u.name,s.seller_id FROM sites s JOIN users u ON u.id=s.publisher_id WHERE s.status='approved' AND s.seller_id IS NOT NULL");
+  res.json({
+    sellers:sellers.map(x=>({seller_id:x.seller_id,name:x.name,seller_type:'PUBLISHER',is_confidential:0}))
+  });
+});
+
+app.get('/ads.txt',(req,res)=>{
+  const host=String(req.hostname||'').replace(/^www\./,'');
+  const site=one("SELECT seller_id FROM sites WHERE domain=? AND status='approved'",[host]);
+  res.type('text/plain').send(site?.seller_id?`adpulse.example, ${site.seller_id}, DIRECT\n`:'# No authorized ADPulse seller for this host\n');
+});
+
 app.post('/api/publisher/sites',auth('publisher'),(req,res)=>{
   const schema=z.object({domain:z.string().min(3),category:z.string().default('general'),language:z.string().default('en')});
   const d=schema.parse(req.body), domain=normalizeDomain(d.domain);
   if(one('SELECT id FROM sites WHERE domain=?',[domain])) return res.status(409).json({error:'Domain already registered'});
   const site={id:id('site'),token:`ap_${crypto.randomBytes(12).toString('hex')}`};
-  run('INSERT INTO sites(id,publisher_id,domain,verification_token,category,language) VALUES(?,?,?,?,?,?)',[site.id,req.user.id,domain,site.token,d.category,d.language]);
+  run('INSERT INTO sites(id,publisher_id,domain,verification_token,category,language,seller_id) VALUES(?,?,?,?,?,?,?)',[site.id,req.user.id,domain,site.token,d.category,d.language,`PUB-${crypto.randomBytes(5).toString('hex').toUpperCase()}`]);
   res.status(201).json({
     id:site.id,domain,verificationToken:site.token,
     methods:{
@@ -118,19 +131,34 @@ app.post('/api/publisher/zones',auth('publisher'),(req,res)=>{
 
 app.get('/api/publisher/zones',auth('publisher'),(req,res)=>res.json(all('SELECT z.*,s.domain FROM zones z JOIN sites s ON s.id=z.site_id WHERE z.publisher_id=? ORDER BY z.created_at DESC',[req.user.id])));
 
+app.post('/api/publisher/sites/:id/verify-ads-txt',auth('publisher'),wrap(async(req,res)=>{
+  const site=one('SELECT * FROM sites WHERE id=?',[req.params.id]); requireOwner(site,req.user.id,'publisher_id');
+  if(site.status!=='approved') return res.status(400).json({error:'Site must be approved first'});
+  const line=`adpulse.example, ${site.seller_id}, DIRECT`;
+  const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),7000);
+  let found=false;
+  try{
+    const r=await fetch(`https://${site.domain}/ads.txt`,{signal:controller.signal,headers:{'user-agent':'ADPulseAdsTxtVerifier/1.0'}});
+    const body=await r.text();
+    found=body.split(/\r?\n/).map(x=>x.trim()).includes(line);
+  } finally { clearTimeout(timer); }
+  run('UPDATE sites SET ads_txt_status=? WHERE id=?',[found?'verified':'missing',site.id]);
+  res.json({verified:found,requiredLine:line,status:found?'verified':'missing'});
+}));
+
 app.post('/api/advertiser/campaigns',auth('advertiser'),(req,res)=>{
   const schema=z.object({
     name:z.string().min(2),destinationUrl:z.string().url(),headline:z.string().min(2).max(120),description:z.string().max(240).optional().default(''),imageUrl:z.string().url().optional().or(z.literal('')),
-    model:z.enum(['CPM','CPC','HYBRID']),currency:z.enum(['KES','CDF','UGX','XOF','XAF','RWF','ZMW','SLE','USD']).default('USD'),cpm:z.number().min(0).default(0),cpc:z.number().min(0).default(0),budgetTotal:z.number().positive(),budgetDaily:z.number().positive(),
+    model:z.enum(['CPM','CPC','HYBRID']),currency:z.enum(['KES','CDF','UGX','XOF','XAF','RWF','ZMW','SLE','USD']).default('USD'),cpm:z.number().min(0).default(0),cpc:z.number().min(0).default(0),budgetTotal:z.number().positive(),budgetDaily:z.number().positive(),frequencyCapDaily:z.number().int().min(1).max(50).default(3),conversionWindowDays:z.number().int().min(1).max(30).default(7),startsAt:z.string().optional(),endsAt:z.string().optional(),
     countries:z.array(z.string()).default([]),categories:z.array(z.string()).default([]),devices:z.array(z.string()).default([])
   });
   const d=schema.parse(req.body);
   if(d.model!=='CPC' && d.cpm<=0) return res.status(400).json({error:'CPM must be greater than zero'});
   if(d.model!=='CPM' && d.cpc<=0) return res.status(400).json({error:'CPC must be greater than zero'});
   const cid=id('cmp');
-  run(`INSERT INTO campaigns(id,advertiser_id,name,destination_url,headline,description,image_url,model,cpm,cpc,budget_total,budget_daily,currency,target_countries,target_categories,target_devices,status)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending_review')`,
-    [cid,req.user.id,d.name,d.destinationUrl,d.headline,d.description,d.imageUrl||null,d.model,d.cpm,d.cpc,d.budgetTotal,d.budgetDaily,d.currency,JSON.stringify(d.countries),JSON.stringify(d.categories),JSON.stringify(d.devices)]);
+  run(`INSERT INTO campaigns(id,advertiser_id,name,destination_url,headline,description,image_url,model,cpm,cpc,budget_total,budget_daily,currency,target_countries,target_categories,target_devices,status,frequency_cap_daily,conversion_window_days,starts_at,ends_at)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending_review',?,?,?,?)`,
+    [cid,req.user.id,d.name,d.destinationUrl,d.headline,d.description,d.imageUrl||null,d.model,d.cpm,d.cpc,d.budgetTotal,d.budgetDaily,d.currency,JSON.stringify(d.countries),JSON.stringify(d.categories),JSON.stringify(d.devices),d.frequencyCapDaily,d.conversionWindowDays,d.startsAt||null,d.endsAt||null]);
   res.status(201).json(one('SELECT * FROM campaigns WHERE id=?',[cid]));
 });
 
@@ -246,6 +274,55 @@ app.post('/api/advertiser/demo-fund',auth('advertiser'),(req,res)=>{
 });
 
 app.get('/api/ledger',auth(),(req,res)=>res.json({balance:balanceFor(req.user.id),balances:balancesFor(req.user.id),entries:all('SELECT * FROM ledger_entries WHERE user_id=? ORDER BY created_at DESC LIMIT 200',[req.user.id])}));
+
+app.get('/api/analytics/publisher',auth('publisher'),(req,res)=>{
+  const byDay=all(`SELECT substr(created_at,1,10) day,
+    SUM(CASE WHEN event_type='request' THEN 1 ELSE 0 END) requests,
+    SUM(CASE WHEN event_type='view' AND valid=1 THEN 1 ELSE 0 END) views,
+    SUM(CASE WHEN event_type='click' AND valid=1 THEN 1 ELSE 0 END) clicks,
+    ROUND(COALESCE(SUM(publisher_amount),0),6) revenue
+    FROM ad_events WHERE publisher_id=? AND created_at>=datetime('now','-30 day')
+    GROUP BY substr(created_at,1,10) ORDER BY day`,[req.user.id]);
+  const totals=one(`SELECT
+    SUM(CASE WHEN event_type='request' THEN 1 ELSE 0 END) requests,
+    SUM(CASE WHEN event_type='view' AND valid=1 THEN 1 ELSE 0 END) views,
+    SUM(CASE WHEN event_type='click' AND valid=1 THEN 1 ELSE 0 END) clicks,
+    ROUND(COALESCE(SUM(publisher_amount),0),6) revenue,
+    ROUND(100.0*SUM(CASE WHEN event_type='click' AND valid=1 THEN 1 ELSE 0 END)/NULLIF(SUM(CASE WHEN event_type='view' AND valid=1 THEN 1 ELSE 0 END),0),2) ctr
+    FROM ad_events WHERE publisher_id=?`,[req.user.id]);
+  res.json({totals,byDay});
+});
+
+app.get('/api/analytics/advertiser',auth('advertiser'),(req,res)=>{
+  const totals=one(`SELECT
+    SUM(CASE WHEN e.event_type='view' AND e.valid=1 THEN 1 ELSE 0 END) impressions,
+    SUM(CASE WHEN e.event_type='click' AND e.valid=1 THEN 1 ELSE 0 END) clicks,
+    ROUND(COALESCE(SUM(e.bill_amount),0),6) spend,
+    ROUND(100.0*SUM(CASE WHEN e.event_type='click' AND e.valid=1 THEN 1 ELSE 0 END)/NULLIF(SUM(CASE WHEN e.event_type='view' AND e.valid=1 THEN 1 ELSE 0 END),0),2) ctr
+    FROM ad_events e JOIN campaigns c ON c.id=e.campaign_id WHERE c.advertiser_id=?`,[req.user.id]);
+  const conv=one('SELECT COUNT(*) conversions,ROUND(COALESCE(SUM(value),0),6) conversion_value FROM conversions WHERE advertiser_id=?',[req.user.id]);
+  res.json({totals:{...totals,...conv}});
+});
+
+app.post('/api/conversions',auth('advertiser'),(req,res)=>{
+  const schema=z.object({campaignId:z.string(),requestId:z.string().optional(),eventName:z.string().min(1).max(64),value:z.number().min(0).default(0),currency:z.string().default('USD'),externalId:z.string().max(120).optional(),metadata:z.record(z.any()).optional().default({})});
+  const d=schema.parse(req.body);
+  const campaign=one('SELECT * FROM campaigns WHERE id=?',[d.campaignId]); requireOwner(campaign,req.user.id,'advertiser_id');
+  if(d.requestId){
+    const click=one("SELECT id,created_at FROM ad_events WHERE request_id=? AND campaign_id=? AND event_type='click' AND valid=1 ORDER BY created_at DESC LIMIT 1",[d.requestId,campaign.id]);
+    if(!click) return res.status(400).json({error:'No attributable valid click found'});
+    const age=(Date.now()-new Date(click.created_at+'Z').getTime())/86400000;
+    if(age>Number(campaign.conversion_window_days||7)) return res.status(400).json({error:'Conversion is outside attribution window'});
+  }
+  const cid=id('cnv');
+  try{
+    run('INSERT INTO conversions(id,campaign_id,advertiser_id,request_id,event_name,value,currency,external_id,metadata) VALUES(?,?,?,?,?,?,?,?,?)',[cid,campaign.id,req.user.id,d.requestId||null,d.eventName,d.value,d.currency.toUpperCase(),d.externalId||null,JSON.stringify(d.metadata)]);
+  }catch(err){
+    if(String(err.message).includes('UNIQUE')) return res.status(409).json({error:'Duplicate conversion externalId'});
+    throw err;
+  }
+  res.status(201).json({id:cid,accepted:true});
+});
 
 app.get('/serve', (req,res)=>{
   const result=makeAdRequest({zoneKey:String(req.query.zone||''),ip:req.ip,userAgent:req.get('user-agent')||'',country:req.get('cf-ipcountry')||''});
