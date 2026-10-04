@@ -13,5 +13,6 @@ jobs:
           node-version: 20
       - run: npm install
       - run: npm run check
+      - run: cp .env.example .env
       - run: docker compose -f docker-compose.production.yml config
       - run: npm test
