@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import crypto from 'node:crypto';
+import dns from 'node:dns/promises';
 import { z } from 'zod';
 import { RateLimiterMemory } from 'rate-limiter-flexible';
 import { config } from './config.js';
@@ -9,7 +10,10 @@ import { db, id, one, all, run, balanceFor, balancesFor, addLedger, ensureAdmin 
 import { register, login, auth } from './auth.js';
 import { makeAdRequest, recordEvent, resetDailySpendIfNeeded } from './ad-engine.js';
 import { xdigitexPay, assertCurrency, assertGateway } from './xdigitex-pay.js';
+import { initProductionStores, productionStatus, writeConversion } from './production-store.js';
+import { classifyPage } from './context-ai.js';
 
+await initProductionStores().catch(err=>console.error('Production stores unavailable, continuing with local fallback:',err.message));
 await ensureAdmin();
 resetDailySpendIfNeeded();
 
@@ -27,7 +31,7 @@ const wrap=(fn)=>(req,res,next)=>Promise.resolve(fn(req,res,next)).catch(next);
 const normalizeDomain=(raw)=>new URL(raw.match(/^https?:\/\//)?raw:`https://${raw}`).hostname.toLowerCase().replace(/^www\./,'');
 const requireOwner=(row,userId,field)=>{ if(!row || (row[field]!==userId)) throw Object.assign(new Error('Not found'),{status:404}); };
 
-app.get('/api/health',(req,res)=>res.json({ok:true,service:'adpulse',version:'0.2.0'}));
+app.get('/api/health',(req,res)=>res.json({ok:true,service:'adpulse',version:'0.3.0',stores:productionStatus()}));
 app.get('/payment-return',(req,res)=>res.redirect('/?payment=return'));
 
 app.post('/api/auth/register',wrap(async(req,res)=>res.status(201).json(await register(req.body))));
@@ -111,8 +115,12 @@ app.post('/api/publisher/sites/:id/verify',auth('publisher'),wrap(async(req,res)
     }else if(method==='file'){
       const r=await fetch(`https://${site.domain}/adpulse-${site.verification_token}.txt`,{signal:controller.signal});
       verified=(await r.text()).trim()===site.verification_token; detail='file';
+    }else if(method==='dns'){
+      const records=await dns.resolveTxt(site.domain);
+      const flat=records.map(parts=>parts.join(''));
+      verified=flat.includes(`adpulse-verification=${site.verification_token}`); detail='dns';
     }else{
-      return res.status(400).json({error:'DNS verification is reserved for the production DNS resolver; use meta or file in this MVP'});
+      return res.status(400).json({error:'Unsupported verification method'});
     }
   } finally { clearTimeout(timeout); }
   if(verified) run("UPDATE sites SET status='pending_review',verification_method=? WHERE id=?",[method,site.id]);
@@ -340,21 +348,21 @@ app.post('/api/conversions',auth('advertiser'),(req,res)=>{
   res.status(201).json({id:cid,accepted:true});
 });
 
-app.get('/serve', (req,res)=>{
-  const result=makeAdRequest({zoneKey:String(req.query.zone||''),ip:req.ip,userAgent:req.get('user-agent')||'',country:req.get('cf-ipcountry')||''});
+app.get('/serve',wrap(async(req,res)=>{
+  const result=await makeAdRequest({zoneKey:String(req.query.zone||''),ip:req.ip,userAgent:req.get('user-agent')||'',country:req.get('cf-ipcountry')||''});
   res.set('Cache-Control','no-store').json(result);
-});
+}));
 
-app.post('/events', (req,res)=>{
+app.post('/events',wrap(async(req,res)=>{
   const schema=z.object({token:z.string(),type:z.enum(['render','view','click','conversion']),metadata:z.record(z.any()).optional().default({})});
   const d=schema.parse(req.body);
-  const result=recordEvent({token:d.token,eventType:d.type,ip:req.ip,userAgent:req.get('user-agent')||'',metadata:d.metadata});
+  const result=await recordEvent({token:d.token,eventType:d.type,ip:req.ip,userAgent:req.get('user-agent')||'',metadata:d.metadata});
   res.json(result);
-});
+}));
 
 app.get('/r/click',wrap(async(req,res)=>{
   const token=String(req.query.t||'');
-  const result=recordEvent({token,eventType:'click',ip:req.ip,userAgent:req.get('user-agent')||'',metadata:{redirect:true}});
+  const result=await recordEvent({token,eventType:'click',ip:req.ip,userAgent:req.get('user-agent')||'',metadata:{redirect:true}});
   const payload=await import('jsonwebtoken').then(m=>m.default.verify(token,config.eventSecret));
   const campaign=one('SELECT destination_url FROM campaigns WHERE id=?',[payload.campaignId]);
   if(!campaign) return res.status(404).send('Campaign unavailable');
