@@ -17,7 +17,7 @@ export function chooseCampaign({zone,country='',device='desktop'}) {
     if(cats.length && !cats.includes(site.category)) return false;
     if(devices.length && !devices.includes(device)) return false;
     if(c.model!=='CPC' && c.cpm < Number(zone.floor_cpm||0)) return false;
-    const bal=balanceFor(c.advertiser_id);
+    const bal=balanceFor(c.advertiser_id,c.currency||'USD');
     if(bal<=0) return false;
     return true;
   });
@@ -63,7 +63,8 @@ export function recordEvent({token,eventType,ip,userAgent,metadata={}}){
   if(eventType==='view' && ['CPM','HYBRID'].includes(campaign.model)) bill=Number(campaign.cpm)/1000;
   if(eventType==='click' && ['CPC','HYBRID'].includes(campaign.model)) bill=Number(campaign.cpc);
   bill=Math.max(0,bill);
-  const advertiserBalance=balanceFor(campaign.advertiser_id);
+  const currency=campaign.currency||'USD';
+  const advertiserBalance=balanceFor(campaign.advertiser_id,currency);
   const valid=fraud.valid && (bill===0 || advertiserBalance>=bill) && (campaign.spent_total+bill<=campaign.budget_total);
   const publisherAmount=valid?bill*config.publisherRevenueShare:0;
   const eventId=id('evt');
@@ -73,8 +74,8 @@ export function recordEvent({token,eventType,ip,userAgent,metadata={}}){
       [eventId,signed.requestId,eventType,signed.campaignId,signed.publisherId,signed.siteId,signed.zoneId,ipHash,userAgent,fraud.score,valid?1:0,valid?bill:0,publisherAmount,JSON.stringify({...metadata,fraudReasons:fraud.reasons})]);
     if(valid && bill>0){
       run('UPDATE campaigns SET spent_total=spent_total+?, spent_today=spent_today+? WHERE id=?',[bill,bill,campaign.id]);
-      addLedger({userId:campaign.advertiser_id,eventId,type:'AD_CHARGE',amount:-bill,note:`${eventType} charge`});
-      addLedger({userId:signed.publisherId,eventId,type:'PUBLISHER_EARNING',amount:publisherAmount,status:'available',note:`${eventType} earning`});
+      addLedger({userId:campaign.advertiser_id,eventId,type:'AD_CHARGE',amount:-bill,currency,note:`${eventType} charge`});
+      addLedger({userId:signed.publisherId,eventId,type:'PUBLISHER_EARNING',amount:publisherAmount,currency,status:'available',note:`${eventType} earning`});
     }
   });
   tx();
