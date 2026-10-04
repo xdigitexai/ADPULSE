@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deviceFromUA } from '../src/fraud.js';
+process.env.DB_PATH=':memory:';
+const { deviceFromUA }=await import('../src/fraud.js');
 
 test('mobile UA',()=>assert.equal(deviceFromUA('Mozilla/5.0 iPhone Mobile Safari'),'mobile'));
 test('headless UA',()=>assert.equal(deviceFromUA('Mozilla/5.0 HeadlessChrome'),'bot'));

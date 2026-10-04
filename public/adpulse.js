@@ -62,7 +62,7 @@
   }
 
   function clickUrl(token){
-    return base+'/r/click?t='+encodeURIComponent(token)+'&bid='+encodeURIComponent(browserId)+'&sid='+encodeURIComponent(sessionId)+'&pa='+(personalizationAllowed()?'1':'0')+(previousCampaignId?'&prev='+encodeURIComponent(previousCampaignId):'');
+    return base+'/r/click?t='+encodeURIComponent(token)+'&bid='+encodeURIComponent(browserId)+'&sid='+encodeURIComponent(sessionId)+'&pa='+(personalizationAllowed()?'1':'0');
   }
 
   function renderCreative(c,ad){
@@ -97,7 +97,8 @@
         +(ctx?.token?'&ctx='+encodeURIComponent(ctx.token):'')
         +'&bid='+encodeURIComponent(browserId)
         +'&sid='+encodeURIComponent(sessionId)
-        +'&pa='+(personalizationAllowed()?'1':'0');
+        +'&pa='+(personalizationAllowed()?'1':'0')
+        +(previousCampaignId?'&prev='+encodeURIComponent(previousCampaignId):'');
 
       const r=await fetch(url,{credentials:'omit'});
       const ad=await r.json();

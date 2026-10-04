@@ -278,11 +278,11 @@ export function all(sql, params=[]) { return db.prepare(sql).all(...params); }
 export function run(sql, params=[]) { return db.prepare(sql).run(...params); }
 
 export function balanceFor(userId,currency='USD') {
-  return Number(one('SELECT COALESCE(SUM(amount),0) AS balance FROM ledger_entries WHERE user_id=? AND currency=? AND status IN ("finalized","available")',[userId,String(currency).toUpperCase()]).balance || 0);
+  return Number(one("SELECT COALESCE(SUM(amount),0) AS balance FROM ledger_entries WHERE user_id=? AND currency=? AND status IN ('finalized','available')",[userId,String(currency).toUpperCase()]).balance || 0);
 }
 
 export function balancesFor(userId){
-  return all('SELECT currency,ROUND(COALESCE(SUM(amount),0),6) balance FROM ledger_entries WHERE user_id=? AND status IN ("finalized","available") GROUP BY currency ORDER BY currency',[userId]);
+  return all("SELECT currency,ROUND(COALESCE(SUM(amount),0),6) balance FROM ledger_entries WHERE user_id=? AND status IN ('finalized','available') GROUP BY currency ORDER BY currency",[userId]);
 }
 
 export function finalizeMaturePublisherEarnings(){

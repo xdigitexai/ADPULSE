@@ -7,16 +7,28 @@ services:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
       clickhouse: { condition: service_healthy }
-    ports: ["3000:3000"]
+    ports: ["127.0.0.1:${ADPULSE_HOST_PORT:-3008}:3000"]
+    mem_limit: 768m
+    cpus: 1.5
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1);return r.json()}).then(r=>{if(!r.ok||!r.stores.postgres||!r.stores.redis||!r.stores.clickhouse)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
     volumes:
       - upload_data:/app/public/uploads
+      # SQLite remains the application's authoritative operational store.
+      - app_data:/app/data
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
       POSTGRES_DB: adpulse
       POSTGRES_USER: adpulse
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    mem_limit: 768m
+    cpus: 1
     volumes: [postgres_data:/var/lib/postgresql/data, ./infra/postgres.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro]
     healthcheck:
       test: ["CMD-SHELL","pg_isready -U adpulse -d adpulse"]
@@ -26,27 +38,34 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: ["redis-server","--appendonly","yes"]
+    command: ["redis-server","--appendonly","yes","--requirepass","${REDIS_PASSWORD:?Set REDIS_PASSWORD}"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD}
+    mem_limit: 384m
+    cpus: 0.5
     volumes: [redis_data:/data]
     healthcheck:
-      test: ["CMD","redis-cli","ping"]
+      test: ["CMD-SHELL","REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 10
   clickhouse:
-    image: clickhouse/clickhouse-server:25
+    image: clickhouse/clickhouse-server:25.8
     restart: unless-stopped
     environment:
       CLICKHOUSE_DB: adpulse
       CLICKHOUSE_USER: adpulse
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-change-me}
-    volumes: [clickhouse_data:/var/lib/clickhouse, ./infra/clickhouse.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro]
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?Set CLICKHOUSE_PASSWORD}
+    mem_limit: 2g
+    cpus: 1.5
+    volumes: [clickhouse_data:/var/lib/clickhouse, ./infra/clickhouse.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro, ./infra/clickhouse-production.xml:/etc/clickhouse-server/config.d/adpulse-resources.xml:ro]
     healthcheck:
       test: ["CMD-SHELL","wget -qO- http://localhost:8123/ping || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 20
 volumes:
+  app_data:
   postgres_data:
   redis_data:
   clickhouse_data:

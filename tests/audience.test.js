@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isSensitiveInterest, interestMatchScore, updateAudienceSignal, audienceFor } from '../src/audience-engine.js';
+process.env.DB_PATH=':memory:';
+const { isSensitiveInterest, interestMatchScore, updateAudienceSignal, audienceFor }=await import('../src/audience-engine.js');
 
 test('sensitive interests are blocked from persistent targeting',()=>{
   for(const x of ['gambling','betting','health','politics','religion','financial hardship']) assert.equal(isSensitiveInterest(x),true);
