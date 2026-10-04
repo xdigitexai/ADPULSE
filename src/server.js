@@ -12,6 +12,7 @@ import { makeAdRequest, recordEvent, resetDailySpendIfNeeded, verifyEvent } from
 import { xdigitexPay, assertCurrency, assertGateway } from './xdigitex-pay.js';
 import { initProductionStores, productionStatus, writeConversion } from './production-store.js';
 import { classifyPage } from './context-ai.js';
+import { answerSupport } from './support-ai.js';
 
 await initProductionStores().catch(err=>console.error('Production stores unavailable, continuing with local fallback:',err.message));
 await ensureAdmin();
@@ -157,6 +158,51 @@ app.post('/api/publisher/sites/:id/verify-ads-txt',auth('publisher'),wrap(async(
   run('UPDATE sites SET ads_txt_status=? WHERE id=?',[found?'verified':'missing',site.id]);
   res.json({verified:found,requiredLine:line,status:found?'verified':'missing'});
 }));
+
+app.post('/api/publisher/sites/:id/analyze',auth('publisher'),wrap(async(req,res)=>{
+  const site=one('SELECT * FROM sites WHERE id=?',[req.params.id]); requireOwner(site,req.user.id,'publisher_id');
+  const r=await fetch(`https://${site.domain}/`,{headers:{'user-agent':'ADPulseContextBot/1.0'},signal:AbortSignal.timeout(8000)});
+  const html=await r.text();
+  const title=(html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1]||site.domain).trim();
+  const text=html.replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').slice(0,20000);
+  const result=await classifyPage({url:`https://${site.domain}/`,title,text});
+  run('UPDATE sites SET category=?,language=?,topics=?,brand_safety=? WHERE id=?',[result.category||site.category,result.language||site.language,JSON.stringify(result.topics||[]),result.brandSafety||'standard',site.id]);
+  res.json(result);
+}));
+
+app.get('/api/support/config',(req,res)=>res.json({email:config.supportEmail,whatsapp:config.supportWhatsapp,liveChat:config.supportChatEnabled}));
+
+app.post('/api/support/ai',wrap(async(req,res)=>{
+  const schema=z.object({message:z.string().min(1).max(4000),role:z.string().optional()});
+  const d=schema.parse(req.body);
+  res.json(await answerSupport(d.message,{role:d.role||'guest'}));
+}));
+
+app.post('/api/support/conversations',(req,res)=>{
+  if(!config.supportChatEnabled) return res.status(503).json({error:'Live chat is currently unavailable'});
+  const schema=z.object({name:z.string().min(2).max(100),email:z.string().email(),subject:z.string().max(120).default('Sales & Support'),message:z.string().min(1).max(4000)});
+  const d=schema.parse(req.body), cid=id('chat'), token=crypto.randomBytes(18).toString('hex');
+  const tx=db.transaction(()=>{
+    run('INSERT INTO support_conversations(id,email,name,subject,status,access_token) VALUES(?,?,?,?,?,?)',[cid,d.email,d.name,d.subject,'open',token]);
+    run('INSERT INTO support_messages(id,conversation_id,sender_type,body) VALUES(?,?,?,?)',[id('msg'),cid,'user',d.message]);
+  }); tx();
+  res.status(201).json({conversationId:cid,accessToken:token,status:'open'});
+});
+
+app.get('/api/support/conversations/:id',(req,res)=>{
+  const conv=one('SELECT * FROM support_conversations WHERE id=?',[req.params.id]);
+  if(!conv || conv.access_token!==String(req.query.token||'')) return res.status(404).json({error:'Conversation not found'});
+  res.json({conversation:conv,messages:all('SELECT * FROM support_messages WHERE conversation_id=? ORDER BY created_at',[conv.id])});
+});
+
+app.post('/api/support/conversations/:id/messages',(req,res)=>{
+  const conv=one('SELECT * FROM support_conversations WHERE id=?',[req.params.id]);
+  if(!conv || conv.access_token!==String(req.body.token||'')) return res.status(404).json({error:'Conversation not found'});
+  const body=z.string().min(1).max(4000).parse(req.body.message);
+  run('INSERT INTO support_messages(id,conversation_id,sender_type,body) VALUES(?,?,?,?)',[id('msg'),conv.id,'user',body]);
+  run('UPDATE support_conversations SET updated_at=CURRENT_TIMESTAMP WHERE id=?',[conv.id]);
+  res.status(201).json({ok:true});
+});
 
 app.post('/api/advertiser/campaigns',auth('advertiser'),(req,res)=>{
   const schema=z.object({
@@ -328,6 +374,7 @@ app.post('/collect/conversion',(req,res)=>{
   const cid=id('cnv');
   try{run('INSERT INTO conversions(id,campaign_id,advertiser_id,request_id,click_event_id,event_name,value,currency,external_id,metadata) VALUES(?,?,?,?,?,?,?,?,?,?)',[cid,campaign.id,campaign.advertiser_id,d.requestId,click.id,d.eventName,d.value,d.currency.toUpperCase(),d.externalId||null,JSON.stringify(d.metadata)]);}
   catch(err){if(String(err.message).includes('UNIQUE')) return res.status(409).json({error:'Duplicate conversion externalId'});throw err}
+  void writeConversion({id:cid,campaign_id:campaign.id,advertiser_id:campaign.advertiser_id,request_id:d.requestId,event_name:d.eventName,value:d.value,currency:d.currency.toUpperCase(),external_id:d.externalId||''}).catch(()=>{});
   res.status(201).json({accepted:true,id:cid});
 });
 
@@ -348,6 +395,7 @@ app.post('/api/conversions',auth('advertiser'),(req,res)=>{
     if(String(err.message).includes('UNIQUE')) return res.status(409).json({error:'Duplicate conversion externalId'});
     throw err;
   }
+  void writeConversion({id:cid,campaign_id:campaign.id,advertiser_id:req.user.id,request_id:d.requestId||'',event_name:d.eventName,value:d.value,currency:d.currency.toUpperCase(),external_id:d.externalId||''}).catch(()=>{});
   res.status(201).json({id:cid,accepted:true});
 });
 
@@ -409,6 +457,21 @@ app.get('/r/click',wrap(async(req,res)=>{
   const target=new URL(campaign.destination_url); target.searchParams.set('_aprid',payload.requestId);
   res.redirect(302,target.toString());
 }));
+
+app.get('/api/admin/support',auth('admin'),(req,res)=>res.json(all("SELECT * FROM support_conversations ORDER BY updated_at DESC LIMIT 200")));
+app.get('/api/admin/support/:id',auth('admin'),(req,res)=>{
+  const conv=one('SELECT * FROM support_conversations WHERE id=?',[req.params.id]);
+  if(!conv) return res.status(404).json({error:'Not found'});
+  res.json({conversation:conv,messages:all('SELECT * FROM support_messages WHERE conversation_id=? ORDER BY created_at',[conv.id])});
+});
+app.post('/api/admin/support/:id/reply',auth('admin'),(req,res)=>{
+  const conv=one('SELECT * FROM support_conversations WHERE id=?',[req.params.id]);
+  if(!conv) return res.status(404).json({error:'Not found'});
+  const body=z.string().min(1).max(4000).parse(req.body.message);
+  run('INSERT INTO support_messages(id,conversation_id,sender_type,sender_id,body) VALUES(?,?,?,?,?)',[id('msg'),conv.id,'admin',req.user.id,body]);
+  run("UPDATE support_conversations SET status='open',updated_at=CURRENT_TIMESTAMP WHERE id=?",[conv.id]);
+  res.status(201).json({ok:true});
+});
 
 app.get('/api/admin/kyc',auth('admin'),(req,res)=>res.json(all("SELECT id,email,name,role,phone,country,kyc_status,created_at FROM users WHERE role!='admin' ORDER BY created_at DESC")));
 app.post('/api/admin/kyc/:id/status',auth('admin'),(req,res)=>{
