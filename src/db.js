@@ -4,6 +4,7 @@ import Database from 'better-sqlite3';
 import bcrypt from 'bcryptjs';
 import { nanoid } from 'nanoid';
 import { config } from './config.js';
+import { mirrorLedger } from './production-store.js';
 
 fs.mkdirSync(path.dirname(config.dbPath), { recursive: true });
 export const db = new Database(config.dbPath);
@@ -217,6 +218,7 @@ export function addLedger({userId,eventId=null,type,amount,currency='USD',status
   const entry = { id:id('led'), userId, eventId, type, amount:Number(amount), currency, status, note };
   run('INSERT INTO ledger_entries(id,user_id,event_id,type,amount,currency,status,note) VALUES(?,?,?,?,?,?,?,?)',
     [entry.id,entry.userId,entry.eventId,entry.type,entry.amount,entry.currency,entry.status,entry.note]);
+  void mirrorLedger(entry).catch(()=>{});
   return entry;
 }
 
