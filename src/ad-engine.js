@@ -9,9 +9,10 @@ import { enrichIp } from './ip-intelligence.js';
 const json = (s) => { try{return JSON.parse(s||'[]')}catch{return []} };
 const today = () => new Date().toISOString().slice(0,10);
 
-export async function chooseCampaign({zone,country='',device='desktop',ipHash=''}) {
+export async function chooseCampaign({zone,country='',device='desktop',ipHash='',contextCategory=''}) {
   const site=one('SELECT * FROM sites WHERE id=?',[zone.site_id]);
   const rows=all("SELECT c.* FROM campaigns c WHERE c.status='active' AND c.spent_total < c.budget_total");
+  const effectiveCategory=contextCategory||site.category;
   const eligible=[];
   for(const c of rows){
     if(c.budget_daily>0 && c.spent_today>=c.budget_daily) continue;
@@ -29,7 +30,7 @@ export async function chooseCampaign({zone,country='',device='desktop',ipHash=''
     }
     const countries=json(c.target_countries), cats=json(c.target_categories), devices=json(c.target_devices);
     if(countries.length && country && !countries.includes(country)) continue;
-    if(cats.length && !cats.includes(site.category)) continue;
+    if(cats.length && !cats.includes(effectiveCategory)) continue;
     if(devices.length && !devices.includes(device)) continue;
     if(c.model!=='CPC' && c.cpm < Number(zone.floor_cpm||0)) continue;
     const bal=balanceFor(c.advertiser_id,c.currency||'USD');
@@ -38,7 +39,7 @@ export async function chooseCampaign({zone,country='',device='desktop',ipHash=''
   }
   if(!eligible.length) return null;
   const scored=eligible.map(c=>{
-    const categoryBoost=json(c.target_categories).includes(site.category)?1.25:1;
+    const categoryBoost=json(c.target_categories).includes(effectiveCategory)?1.25:1;
     const bid=(c.model==='CPC'?c.cpc*10:c.cpm) || .01;
     return {c,score:bid*categoryBoost*(.8+Math.random()*.4)};
   }).sort((a,b)=>b.score-a.score);
@@ -48,17 +49,20 @@ export async function chooseCampaign({zone,country='',device='desktop',ipHash=''
 export function signEvent(payload){ return jwt.sign(payload,config.eventSecret,{expiresIn:'30m'}); }
 export function verifyEvent(token){ return jwt.verify(token,config.eventSecret); }
 
-export async function makeAdRequest({zoneKey,ip,userAgent,country}) {
+export async function makeAdRequest({zoneKey,ip,userAgent,country,contextToken=''}) {
   const zone=one("SELECT * FROM zones WHERE public_key=? AND status='active'",[zoneKey]);
   if(!zone) return {noFill:true,reason:'invalid_zone'};
   const site=one("SELECT * FROM sites WHERE id=? AND status='approved'",[zone.site_id]);
   if(!site) return {noFill:true,reason:'site_not_approved'};
   const device=deviceFromUA(userAgent);
   if(device==='bot') return {noFill:true,reason:'bot'};
+  let context={category:'',brandSafety:'standard',topics:[]};
+  if(contextToken){try{const parsed=verifyEvent(contextToken);if(parsed.type==='context'&&parsed.siteId===site.id)context={category:parsed.category||'',brandSafety:parsed.brandSafety||'standard',topics:parsed.topics||[]}}catch{}}
+  if(context.brandSafety==='restricted') return {noFill:true,reason:'brand_safety'};
   const requestId=id('req'), eventId=id('evt'), ipHash=hashIp(ip);
-  const campaign=await chooseCampaign({zone,country,device,ipHash});
+  const campaign=await chooseCampaign({zone,country,device,ipHash,contextCategory:context.category});
   run("INSERT INTO ad_events(id,request_id,event_type,campaign_id,publisher_id,site_id,zone_id,ip_hash,user_agent,country,device,metadata) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-    [eventId,requestId,'request',campaign?.id||null,zone.publisher_id,zone.site_id,zone.id,ipHash,userAgent,country||null,device,'{}']);
+    [eventId,requestId,'request',campaign?.id||null,zone.publisher_id,zone.site_id,zone.id,ipHash,userAgent,country||null,device,JSON.stringify({context})]);
   void writeAdEvent({id:eventId,request_id:requestId,event_type:'request',campaign_id:campaign?.id||'',publisher_id:zone.publisher_id,site_id:zone.site_id,zone_id:zone.id,ip_hash:ipHash,country:country||'',device,risk_score:0,valid:1,bill_amount:0,publisher_amount:0}).catch(()=>{});
   if(!campaign) return {noFill:true,reason:'no_campaign',requestId};
   const token=signEvent({requestId,campaignId:campaign.id,publisherId:zone.publisher_id,siteId:zone.site_id,zoneId:zone.id,ipHash});
@@ -89,7 +93,7 @@ export async function recordEvent({token,eventType,ip,userAgent,metadata={}}){
 
   const tx=db.transaction(()=>{
     run("INSERT INTO ad_events(id,request_id,event_type,campaign_id,publisher_id,site_id,zone_id,ip_hash,user_agent,risk_score,valid,bill_amount,publisher_amount,metadata) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-      [eventId,signed.requestId,eventType,signed.campaignId,signed.publisherId,signed.siteId,signed.zoneId,ipHash,userAgent,fraud.score,valid?1:0,valid?bill:0,publisherAmount,JSON.stringify({...metadata,fraudReasons:fraud.reasons})]);
+      [eventId,signed.requestId,eventType,signed.campaignId,signed.publisherId,signed.siteId,signed.zoneId,ipHash,userAgent,fraud.score,valid?1:0,valid?bill:0,publisherAmount,JSON.stringify({...metadata,fraudReasons:fraud.reasons,network:{source:intel.source,asn:intel.asn,asnName:intel.asnName,asnType:intel.asnType,vpn:intel.vpn,proxy:intel.proxy,tor:intel.tor,hosting:intel.hosting,relay:intel.relay}})]);
     if(valid && bill>0){
       run('UPDATE campaigns SET spent_total=spent_total+?, spent_today=spent_today+? WHERE id=?',[bill,bill,campaign.id]);
       addLedger({userId:campaign.advertiser_id,eventId,type:'AD_CHARGE',amount:-bill,currency,note:`${eventType} charge`});
