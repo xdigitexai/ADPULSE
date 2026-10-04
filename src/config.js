@@ -30,7 +30,10 @@ export const config = {
   supportEmail: process.env.SUPPORT_EMAIL || 'sales@adpulse.example',
   supportWhatsapp: process.env.SUPPORT_WHATSAPP || '',
   supportChatEnabled: String(process.env.SUPPORT_CHAT_ENABLED || 'true').toLowerCase()==='true',
-  productionStoresRequired: String(process.env.PRODUCTION_STORES_REQUIRED || 'false').toLowerCase()==='true'
+  productionStoresRequired: String(process.env.PRODUCTION_STORES_REQUIRED || 'false').toLowerCase()==='true',
+  googleClientId: process.env.GOOGLE_CLIENT_ID || '',
+  uploadDir: process.env.UPLOAD_DIR || './public/uploads',
+  minimumPayoutUsd: num(process.env.MINIMUM_PAYOUT_USD,5)
 };
 
 if (config.env === 'production' && (config.jwtSecret.includes('change-me') || config.jwtSecret.length < 32)) {
