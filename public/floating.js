@@ -15,12 +15,30 @@ class FloatingAds{
   }
   save(){try{sessionStorage.setItem('adpulse-popup-state',JSON.stringify(this.state))}catch{}}
   async config(){const r=await fetch(this.base+'/zone-config?zone='+encodeURIComponent(this.zone),{credentials:'omit',cache:'no-store'});if(!r.ok)throw Error('Configuration unavailable');return r.json()}
+  clearance(){
+    let lift=16;
+    for(const el of document.querySelectorAll('[id],[style],nav,footer,[class*="chat"],[class*="widget"]')){
+      if(el===this.host)continue;const r=el.getBoundingClientRect();
+      if(r.width>0&&r.height>0&&r.height<150&&r.left<innerWidth&&r.right>0&&r.bottom>=innerHeight-20&&getComputedStyle(el).position==='fixed')lift=Math.max(lift,innerHeight-r.top+12);
+    }
+    return lift;
+  }
+  placementClear(){
+    if(this.settings?.popupStyle==='center')return true;
+    const mobile=innerWidth<=600,width=mobile?innerWidth*.92:Math.min(380,innerWidth-32),position=this.settings?.position;
+    const left=mobile?innerWidth*.04:position==='bottom-left'?16:position==='bottom-center'?(innerWidth-width)/2:innerWidth-width-16;
+    const bottom=innerHeight-this.clearance(),top=bottom-Math.min(310,innerHeight*.38);
+    for(const el of document.querySelectorAll('button,.btn,[role="button"],input[type="submit"],a[class*="cta"]')){
+      const r=el.getBoundingClientRect();if(r.width&&r.height&&r.left<left+width&&r.right>left&&r.top<bottom&&r.bottom>top&&getComputedStyle(el).visibility!=='hidden')return false;
+    }
+    return true;
+  }
   safe(){
     if(document.hidden||document.fullscreenElement)return false;
     if(/(?:^|\/)(?:login|register|signup|sign-in|checkout|payment|pay|auth)(?:[/.?]|$)/i.test(location.pathname+location.search))return false;
     const el=document.activeElement;if(el&&(el.matches('input,textarea,select,[contenteditable="true"]')||el.isContentEditable))return false;
     for(const modal of document.querySelectorAll('dialog[open],[aria-modal="true"],.modal.show,.modal.active'))if(modal.getBoundingClientRect().width&&modal.getBoundingClientRect().height)return false;
-    return true;
+    return this.placementClear();
   }
   async tick(){
     if(this.busy)return;this.busy=true;
@@ -55,7 +73,7 @@ class FloatingAds{
     // Inline host styles survive hostile publisher rules; all internal styles are isolated.
     host.style.cssText='position:fixed!important;inset:0!important;z-index:10000!important;pointer-events:none!important;display:block!important;margin:0!important;padding:0!important;border:0!important;';
     const root=host.attachShadow({mode:'open'});let style=s.popupStyle==='mixed'?(this.state.shown%2?'floating':'center'):s.popupStyle;
-    let lift=16;for(const el of document.querySelectorAll('nav,footer,[class*="chat"],[class*="widget"]')){const r=el.getBoundingClientRect();if(getComputedStyle(el).position==='fixed'&&r.height>0&&r.height<130&&r.bottom>=innerHeight-20)lift=Math.max(lift,innerHeight-r.top+12)}
+    const lift=this.clearance();
     const url=this.clickUrl(ad.token);const media=c.creativeType==='video'&&c.videoUrl?'<video controls playsinline preload="metadata" src="'+escapeHtml(c.videoUrl)+'"></video>':c.imageUrl?'<a href="'+escapeHtml(url)+'" target="_blank" rel="noopener sponsored" aria-label="'+escapeHtml(c.headline)+'"><img src="'+escapeHtml(c.imageUrl)+'" alt="'+escapeHtml(c.headline)+'"></a>':'';
     root.innerHTML=`<style>:host{all:initial}*{box-sizing:border-box}.overlay{position:absolute;inset:0;background:rgba(15,23,42,.25);pointer-events:auto}.card{position:absolute;bottom:${lift}px;right:16px;width:min(380px,calc(100vw - 32px));max-height:38dvh;overflow:auto;border:1px solid #dfe4eb;border-radius:14px;background:white;color:#172033;font:14px/1.4 system-ui,sans-serif;box-shadow:0 10px 35px #0002;pointer-events:auto;animation:enter .2s ease}.left{right:auto;left:16px}.bottom-center{right:auto;left:50%;transform:translateX(-50%)}.center{left:50%;top:50%;bottom:auto;right:auto;transform:translate(-50%,-50%);max-height:60dvh}.bar{position:sticky;top:0;z-index:2;background:white;display:flex;align-items:center;justify-content:space-between;padding:5px 10px;font-size:11px;color:#536174}.close{min-width:36px;min-height:36px;font-size:24px;line-height:1;background:none;border:0;border-radius:8px;cursor:pointer;color:#172033}.close:focus-visible,a:focus-visible{outline:3px solid #2563eb;outline-offset:-3px}img,video{width:100%;display:block;max-height:min(23dvh,calc(38dvh - 112px));object-fit:contain;background:#f7f9fc}.body{padding:10px 14px}.body p{margin:5px 0;color:#56606f;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.cta{display:inline-block;padding:8px 12px;color:white;background:#153d70;text-decoration:none;border-radius:7px;margin:8px 14px 12px}.center img,.center video{max-height:35dvh}@keyframes enter{from{opacity:0}to{opacity:1}}@media(max-width:600px){.card{width:92vw;left:4vw;right:auto;max-height:38dvh}.center{left:50%;width:92vw;max-height:60dvh}.bottom-center{left:50%}}@media(prefers-reduced-motion:reduce){.card{animation:none}}</style>${style==='center'?'<div class="overlay"></div>':''}<aside class="card ${style==='center'?'center':s.position==='bottom-left'?'left':s.position==='bottom-center'?'bottom-center':''}" aria-label="Advertisement"><div class="bar"><span>Sponsored · ADPulse</span><button class="close" aria-label="Close advertisement" type="button">×</button></div>${media}${s.creativeOnly&&media?'':`<div class="body"><strong>${escapeHtml(c.headline)}</strong><p>${escapeHtml(c.description)}</p></div>`}<a class="cta" href="${escapeHtml(url)}" target="_blank" rel="noopener sponsored">Learn more</a></aside>`;
     this.card=root.querySelector('.card');root.querySelector('.close').onclick=()=>this.close('dismiss');root.querySelector('.overlay')?.addEventListener('click',()=>this.close('dismiss'));document.body.appendChild(host);
