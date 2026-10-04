@@ -62,7 +62,7 @@
   }
 
   function clickUrl(token){
-    return base+'/r/click?t='+encodeURIComponent(token)+'&bid='+encodeURIComponent(browserId)+'&sid='+encodeURIComponent(sessionId);
+    return base+'/r/click?t='+encodeURIComponent(token)+'&bid='+encodeURIComponent(browserId)+'&sid='+encodeURIComponent(sessionId)+'&pa='+(personalizationAllowed()?'1':'0');
   }
 
   function renderCreative(c,ad){
