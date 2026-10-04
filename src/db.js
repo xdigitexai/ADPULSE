@@ -102,6 +102,11 @@ CREATE TABLE IF NOT EXISTS ledger_entries (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_ledger_user ON ledger_entries(user_id, created_at);
+CREATE TABLE IF NOT EXISTS system_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS moderation (
   id TEXT PRIMARY KEY,
   object_type TEXT NOT NULL,
