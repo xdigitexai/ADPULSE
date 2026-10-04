@@ -10,12 +10,13 @@ import { db, id, one, all, run, balanceFor, balancesFor, addLedger, ensureAdmin 
 import { register, login, auth } from './auth.js';
 import { makeAdRequest, recordEvent, resetDailySpendIfNeeded, verifyEvent } from './ad-engine.js';
 import { xdigitexPay, assertCurrency, assertGateway } from './xdigitex-pay.js';
-import { initProductionStores, productionStatus, writeConversion } from './production-store.js';
+import { initProductionStores, productionStatus, writeConversion, mirrorSiteContext } from './production-store.js';
 import { classifyPage } from './context-ai.js';
 import { answerSupport } from './support-ai.js';
-import { fetchPublisherPath } from './safe-fetch.js';
+import { fetchPublisherPath, safeFetchUrl } from './safe-fetch.js';
 
-await initProductionStores().catch(err=>console.error('Production stores unavailable, continuing with local fallback:',err.message));
+const storeState=await initProductionStores().catch(err=>{console.error('Production stores unavailable:',err.message);return {postgres:false,redis:false,clickhouse:false}});
+if(config.productionStoresRequired && (!storeState.postgres || !storeState.redis || !storeState.clickhouse)) throw new Error('PRODUCTION_STORES_REQUIRED is enabled but one or more production stores are unavailable');
 await ensureAdmin();
 resetDailySpendIfNeeded();
 
