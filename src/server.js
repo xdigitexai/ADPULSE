@@ -14,6 +14,7 @@ import { initProductionStores, productionStatus, writeConversion, mirrorSiteCont
 import { classifyPage } from './context-ai.js';
 import { answerSupport } from './support-ai.js';
 import { classifyPageForZone } from './page-context.js';
+import { hashIp } from './fraud.js';
 import { fetchPublisherPath, safeFetchUrl } from './safe-fetch.js';
 
 const storeState=await initProductionStores().catch(err=>{console.error('Production stores unavailable:',err.message);return {postgres:false,redis:false,clickhouse:false}});
@@ -40,8 +41,8 @@ const xmlEscape=x=>String(x??'').replace(/[<>&"']/g,c=>({'<':'&lt;','>':'&gt;','
 app.get('/api/health',(req,res)=>res.json({ok:true,service:'adpulse',version:'0.3.0',stores:productionStatus()}));
 app.get('/payment-return',(req,res)=>res.redirect('/?payment=return'));
 
-app.post('/api/auth/register',wrap(async(req,res)=>res.status(201).json(await register(req.body))));
-app.post('/api/auth/login',wrap(async(req,res)=>res.json(await login(req.body.email,req.body.password))));
+app.post('/api/auth/register',wrap(async(req,res)=>{const result=await register(req.body);run("INSERT INTO account_ip_history(id,user_id,ip_hash) VALUES(?,?,?) ON CONFLICT(user_id,ip_hash) DO UPDATE SET last_seen=CURRENT_TIMESTAMP",[id('aip'),result.user.id,hashIp(req.ip)]);res.status(201).json(result)}));
+app.post('/api/auth/login',wrap(async(req,res)=>{const result=await login(req.body.email,req.body.password);run("INSERT INTO account_ip_history(id,user_id,ip_hash) VALUES(?,?,?) ON CONFLICT(user_id,ip_hash) DO UPDATE SET last_seen=CURRENT_TIMESTAMP",[id('aip'),result.user.id,hashIp(req.ip)]);res.json(result)}));
 app.get('/api/me',auth(),(req,res)=>res.json({user:req.user,balance:balanceFor(req.user.id),balances:balancesFor(req.user.id)}));
 
 app.get('/api/dashboard',auth(),(req,res)=>{
