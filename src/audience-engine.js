@@ -2,7 +2,7 @@ import { one, all, run, db } from './db.js';
 
 export const SENSITIVE_INTERESTS=new Set([
   'gambling','betting','casino','health','medical','politics','political','religion',
-  'sexuality','sexual_orientation','financial_hardship','debt','addiction'
+  'sexuality','sexual_orientation','financial_hardship','debt','addiction','forex','trading','investment','investing','loan','credit','crypto'
 ]);
 
 const clamp=n=>Math.max(0,Math.min(1,Number(n)||0));
