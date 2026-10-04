@@ -6,7 +6,7 @@ import dns from 'node:dns/promises';
 import { z } from 'zod';
 import { RateLimiterMemory } from 'rate-limiter-flexible';
 import { config } from './config.js';
-import { db, id, one, all, run, balanceFor, balancesFor, addLedger, ensureAdmin } from './db.js';
+import { db, id, one, all, run, balanceFor, balancesFor, addLedger, ensureAdmin, finalizeMaturePublisherEarnings } from './db.js';
 import { register, login, auth } from './auth.js';
 import { makeAdRequest, recordEvent, resetDailySpendIfNeeded, verifyEvent } from './ad-engine.js';
 import { xdigitexPay, assertCurrency, assertGateway } from './xdigitex-pay.js';
@@ -45,6 +45,7 @@ app.post('/api/auth/login',wrap(async(req,res)=>res.json(await login(req.body.em
 app.get('/api/me',auth(),(req,res)=>res.json({user:req.user,balance:balanceFor(req.user.id),balances:balancesFor(req.user.id)}));
 
 app.get('/api/dashboard',auth(),(req,res)=>{
+  finalizeMaturePublisherEarnings();
   const u=req.user;
   if(u.role==='publisher'){
     return res.json({
@@ -304,6 +305,7 @@ app.post('/webhooks/xdigitex-pay',wrap(async(req,res)=>{
 }));
 
 app.post('/api/publisher/withdrawals',auth('publisher'),wrap(async(req,res)=>{
+  finalizeMaturePublisherEarnings();
   if(config.kycRequired && req.user.kyc_status!=='verified') return res.status(403).json({error:'KYC verification is required before withdrawal'});
   const schema=z.object({amount:z.number().positive(),currency:z.string(),accountNumber:z.string().min(8).max(30)});
   const d=schema.parse(req.body),currency=assertCurrency(d.currency);
@@ -337,7 +339,7 @@ app.post('/api/advertiser/demo-fund',auth('advertiser'),(req,res)=>{
   res.json({balance:balanceFor(req.user.id)});
 });
 
-app.get('/api/ledger',auth(),(req,res)=>res.json({balance:balanceFor(req.user.id),balances:balancesFor(req.user.id),entries:all('SELECT * FROM ledger_entries WHERE user_id=? ORDER BY created_at DESC LIMIT 200',[req.user.id])}));
+app.get('/api/ledger',auth(),(req,res)=>{ finalizeMaturePublisherEarnings(); return res.json({balance:balanceFor(req.user.id),balances:balancesFor(req.user.id),entries:all('SELECT * FROM ledger_entries WHERE user_id=? ORDER BY created_at DESC LIMIT 200',[req.user.id])}); });
 
 app.get('/api/analytics/publisher',auth('publisher'),(req,res)=>{
   const byDay=all(`SELECT substr(created_at,1,10) day,
@@ -456,7 +458,7 @@ app.post('/events',wrap(async(req,res)=>{
 
 app.get('/r/click',wrap(async(req,res)=>{
   const token=String(req.query.t||'');
-  const result=await recordEvent({token,eventType:'click',ip:req.ip,userAgent:req.get('user-agent')||'',metadata:{redirect:true}});
+  const result=await recordEvent({token,eventType:'click',ip:req.ip,userAgent:req.get('user-agent')||'',metadata:{redirect:true,browserId:String(req.query.bid||''),sessionId:String(req.query.sid||'')}});
   const payload=await import('jsonwebtoken').then(m=>m.default.verify(token,config.eventSecret));
   const campaign=one('SELECT destination_url FROM campaigns WHERE id=?',[payload.campaignId]);
   if(!campaign) return res.status(404).send('Campaign unavailable');
