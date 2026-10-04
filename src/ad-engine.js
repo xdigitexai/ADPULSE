@@ -59,7 +59,7 @@ export async function chooseCampaign({zone,country='',device='desktop',ipHash=''
   return scored[0].c;
 }
 
-export function signEvent(payload){ return jwt.sign(payload,config.eventSecret,{expiresIn:'30m'}); }
+export function signEvent(payload,expiresIn='30m'){ return jwt.sign(payload,config.eventSecret,{expiresIn}); }
 export function verifyEvent(token){ return jwt.verify(token,config.eventSecret); }
 
 export async function makeAdRequest({zoneKey,ip,userAgent,country,contextToken='',browserId='',sessionId='',personalizationAllowed=false,previousCampaignId='',excludedCampaignIds=[]}) {
@@ -79,7 +79,7 @@ export async function makeAdRequest({zoneKey,ip,userAgent,country,contextToken='
     [eventId,requestId,'request',campaign?.id||null,zone.publisher_id,zone.site_id,zone.id,ipHash,userAgent,country||null,device,JSON.stringify({context})]);
   void writeAdEvent({id:eventId,request_id:requestId,event_type:'request',campaign_id:campaign?.id||'',publisher_id:zone.publisher_id,site_id:zone.site_id,zone_id:zone.id,ip_hash:ipHash,country:country||'',device,risk_score:0,valid:1,bill_amount:0,publisher_amount:0}).catch(()=>{});
   if(!campaign) return {noFill:true,reason:'no_campaign',requestId};
-  const token=signEvent({requestId,campaignId:campaign.id,publisherId:zone.publisher_id,siteId:zone.site_id,zoneId:zone.id,ipHash,contextCategory:context.category||'',contextTopics:context.topics||[]});
+  const token=signEvent({requestId,campaignId:campaign.id,publisherId:zone.publisher_id,siteId:zone.site_id,zoneId:zone.id,ipHash,contextCategory:context.category||'',contextTopics:context.topics||[]},zoneDisplaySettings(zone).autoClose===false?'24h':'30m');
   return {
     noFill:false,requestId,token,
     creative:{headline:campaign.headline,description:campaign.description,imageUrl:campaign.image_url,videoUrl:campaign.video_url,creativeType:campaign.creative_type||'display',destinationUrl:campaign.destination_url,width:zone.width,height:zone.height,format:zone.format},

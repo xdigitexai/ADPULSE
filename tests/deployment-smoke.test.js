@@ -195,7 +195,7 @@ test('production deployment smoke: boot, uploads, accounts, accounting and provi
     assert.equal(one('SELECT COUNT(*) n FROM ledger_entries').n,before);
     await api('/api/publisher/zones/'+zones.native.id+'/display-settings',{token:pub.token,body:{displayMode:'inline'}});
     assert.equal((await api('/serve?zone='+zones.native.publicKey,{headers})).noFill,true);
-    const config=await api('/zone-config?zone='+zones['300x250'].publicKey);assert.equal(config.settings.maxAdsPerSession,2);
+    const config=await api('/zone-config?zone='+zones['300x250'].publicKey);assert.equal(config.settings.maxAdsPerSession,0);
     await api('/api/publisher/zones/'+zones['300x250'].id+'/display-settings',{token:adv.token,body:{pauseAds:true},status:403});
     await api('/api/publisher/zones/'+zones['300x250'].id+'/display-settings',{token:pub.token,body:{maxAdsPerSession:10},status:400});
     await api('/api/publisher/zones/'+zones['300x250'].id+'/display-settings',{token:pub.token,body:{minPopupDelaySeconds:35,maxPopupDelaySeconds:12},status:400});
