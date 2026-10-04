@@ -7,11 +7,18 @@ import { hashIp, deviceFromUA, scoreEvent } from './fraud.js';
 const json = (s) => { try{return JSON.parse(s||'[]')}catch{return []} };
 const today = () => new Date().toISOString().slice(0,10);
 
-export function chooseCampaign({zone,country='',device='desktop'}) {
+export function chooseCampaign({zone,country='',device='desktop',ipHash=''}) {
   const site=one('SELECT * FROM sites WHERE id=?',[zone.site_id]);
   const rows=all("SELECT c.* FROM campaigns c WHERE c.status='active' AND c.spent_total < c.budget_total");
   const eligible=rows.filter(c=>{
     if(c.budget_daily>0 && c.spent_today>=c.budget_daily) return false;
+    const now=new Date();
+    if(c.starts_at && new Date(c.starts_at)>now) return false;
+    if(c.ends_at && new Date(c.ends_at)<now) return false;
+    if(ipHash && c.frequency_cap_daily>0){
+      const seen=one("SELECT COUNT(*) n FROM ad_events WHERE campaign_id=? AND ip_hash=? AND event_type='view' AND valid=1 AND created_at>=datetime('now','-1 day')",[c.id,ipHash]);
+      if(Number(seen?.n||0)>=Number(c.frequency_cap_daily)) return false;
+    }
     const countries=json(c.target_countries), cats=json(c.target_categories), devices=json(c.target_devices);
     if(countries.length && country && !countries.includes(country)) return false;
     if(cats.length && !cats.includes(site.category)) return false;
@@ -40,8 +47,8 @@ export function makeAdRequest({zoneKey,ip,userAgent,country}) {
   if(!site) return {noFill:true,reason:'site_not_approved'};
   const device=deviceFromUA(userAgent);
   if(device==='bot') return {noFill:true,reason:'bot'};
-  const campaign=chooseCampaign({zone,country,device});
   const requestId=id('req'), eventId=id('evt'), ipHash=hashIp(ip);
+  const campaign=chooseCampaign({zone,country,device,ipHash});
   run("INSERT INTO ad_events(id,request_id,event_type,campaign_id,publisher_id,site_id,zone_id,ip_hash,user_agent,country,device,metadata) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
     [eventId,requestId,'request',campaign?.id||null,zone.publisher_id,zone.site_id,zone.id,ipHash,userAgent,country||null,device,'{}']);
   if(!campaign) return {noFill:true,reason:'no_campaign',requestId};
