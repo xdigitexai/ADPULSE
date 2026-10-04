@@ -63,6 +63,8 @@ CREATE TABLE IF NOT EXISTS campaigns (
   headline TEXT NOT NULL,
   description TEXT,
   image_url TEXT,
+  video_url TEXT,
+  creative_type TEXT NOT NULL DEFAULT 'display',
   model TEXT NOT NULL CHECK(model IN ('CPM','CPC','HYBRID')),
   cpm REAL NOT NULL DEFAULT 0,
   cpc REAL NOT NULL DEFAULT 0,
@@ -193,6 +195,8 @@ if(!hasColumn('sites','brand_safety')) db.exec("ALTER TABLE sites ADD COLUMN bra
 if(!hasColumn('campaigns','frequency_cap_daily')) db.exec("ALTER TABLE campaigns ADD COLUMN frequency_cap_daily INTEGER NOT NULL DEFAULT 3");
 if(!hasColumn('campaigns','conversion_window_days')) db.exec("ALTER TABLE campaigns ADD COLUMN conversion_window_days INTEGER NOT NULL DEFAULT 7");
 if(!hasColumn('campaigns','public_key')) db.exec("ALTER TABLE campaigns ADD COLUMN public_key TEXT");
+if(!hasColumn('campaigns','video_url')) db.exec("ALTER TABLE campaigns ADD COLUMN video_url TEXT");
+if(!hasColumn('campaigns','creative_type')) db.exec("ALTER TABLE campaigns ADD COLUMN creative_type TEXT NOT NULL DEFAULT 'display'");
 
 for(const row of db.prepare("SELECT id FROM campaigns WHERE public_key IS NULL OR public_key='' ").all()){
   db.prepare('UPDATE campaigns SET public_key=? WHERE id=?').run(`cmp_${nanoid(24)}`,row.id);
