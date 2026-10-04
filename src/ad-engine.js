@@ -12,25 +12,30 @@ const today = () => new Date().toISOString().slice(0,10);
 export async function chooseCampaign({zone,country='',device='desktop',ipHash=''}) {
   const site=one('SELECT * FROM sites WHERE id=?',[zone.site_id]);
   const rows=all("SELECT c.* FROM campaigns c WHERE c.status='active' AND c.spent_total < c.budget_total");
-  const eligible=rows.filter(c=>{
-    if(c.budget_daily>0 && c.spent_today>=c.budget_daily) return false;
+  const eligible=[];
+  for(const c of rows){
+    if(c.budget_daily>0 && c.spent_today>=c.budget_daily) continue;
     const now=new Date();
-    if(c.starts_at && new Date(c.starts_at)>now) return false;
-    if(c.ends_at && new Date(c.ends_at)<now) return false;
+    if(c.starts_at && new Date(c.starts_at)>now) continue;
+    if(c.ends_at && new Date(c.ends_at)<now) continue;
     if(ipHash && c.frequency_cap_daily>0){
       const redisCount=await getFrequency({campaignId:c.id,ipHash});
-      if(redisCount!==null){ if(redisCount>=Number(c.frequency_cap_daily)) return false; }
-      else { const seen=one("SELECT COUNT(*) n FROM ad_events WHERE campaign_id=? AND ip_hash=? AND event_type='view' AND valid=1 AND created_at>=datetime('now','-1 day')",[c.id,ipHash]); if(Number(seen?.n||0)>=Number(c.frequency_cap_daily)) return false; }
+      if(redisCount!==null){
+        if(redisCount>=Number(c.frequency_cap_daily)) continue;
+      }else{
+        const seen=one("SELECT COUNT(*) n FROM ad_events WHERE campaign_id=? AND ip_hash=? AND event_type='view' AND valid=1 AND created_at>=datetime('now','-1 day')",[c.id,ipHash]);
+        if(Number(seen?.n||0)>=Number(c.frequency_cap_daily)) continue;
+      }
     }
     const countries=json(c.target_countries), cats=json(c.target_categories), devices=json(c.target_devices);
-    if(countries.length && country && !countries.includes(country)) return false;
-    if(cats.length && !cats.includes(site.category)) return false;
-    if(devices.length && !devices.includes(device)) return false;
-    if(c.model!=='CPC' && c.cpm < Number(zone.floor_cpm||0)) return false;
+    if(countries.length && country && !countries.includes(country)) continue;
+    if(cats.length && !cats.includes(site.category)) continue;
+    if(devices.length && !devices.includes(device)) continue;
+    if(c.model!=='CPC' && c.cpm < Number(zone.floor_cpm||0)) continue;
     const bal=balanceFor(c.advertiser_id,c.currency||'USD');
-    if(bal<=0) return false;
-    return true;
-  });
+    if(bal<=0) continue;
+    eligible.push(c);
+  }
   if(!eligible.length) return null;
   const scored=eligible.map(c=>{
     const categoryBoost=json(c.target_categories).includes(site.category)?1.25:1;
