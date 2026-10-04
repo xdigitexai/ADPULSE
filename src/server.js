@@ -409,10 +409,10 @@ app.get('/vast',wrap(async(req,res)=>{
   const token=String(req.query.t||'');
   const payload=verifyEvent(token);
   const campaign=one('SELECT * FROM campaigns WHERE id=?',[payload.campaignId]);
-  if(!campaign || campaign.creative_type!=='video' || !campaign.video_url) return res.status(404).type('application/xml').send('<VAST version="4.2"></VAST>');
+  if(!campaign || campaign.creative_type!=='video' || !campaign.video_url) return res.status(404).type('application/xml').send('<VAST version="4.3"></VAST>');
   const impression=`${config.appUrl}/vast/event?t=${encodeURIComponent(token)}&type=view`;
   const click=`${config.appUrl}/r/click?t=${encodeURIComponent(token)}`;
-  const xml=`<?xml version="1.0" encoding="UTF-8"?><VAST version="4.2"><Ad id="${xmlEscape(campaign.id)}"><InLine><AdSystem version="1.0">ADPulse</AdSystem><AdTitle>${xmlEscape(campaign.headline)}</AdTitle><Impression><![CDATA[${impression}]]></Impression><Creatives><Creative><Linear><Duration>00:00:30</Duration><MediaFiles><MediaFile delivery="progressive" type="video/mp4"><![CDATA[${campaign.video_url}]]></MediaFile></MediaFiles><VideoClicks><ClickThrough><![CDATA[${click}]]></ClickThrough></VideoClicks></Linear></Creative></Creatives></InLine></Ad></VAST>`;
+  const xml=`<?xml version="1.0" encoding="UTF-8"?><VAST version="4.3"><Ad id="${xmlEscape(campaign.id)}"><InLine><AdSystem version="1.0">ADPulse</AdSystem><AdTitle>${xmlEscape(campaign.headline)}</AdTitle><Impression><![CDATA[${impression}]]></Impression><Creatives><Creative><Linear><Duration>00:00:30</Duration><MediaFiles><MediaFile delivery="progressive" type="video/mp4"><![CDATA[${campaign.video_url}]]></MediaFile></MediaFiles><VideoClicks><ClickThrough><![CDATA[${click}]]></ClickThrough></VideoClicks></Linear></Creative></Creatives></InLine></Ad></VAST>`;
   res.type('application/xml').send(xml);
 }));
 
@@ -434,7 +434,7 @@ app.post('/openrtb2/auction',wrap(async(req,res)=>{
   const price=Number(campaign.model==='CPC'?campaign.cpc*10:campaign.cpm||0.01);
   let adm='';
   if(campaign.creative_type==='video'){
-    adm=`<?xml version="1.0" encoding="UTF-8"?><VAST version="4.2"><Ad><Wrapper><AdSystem>ADPulse</AdSystem><VASTAdTagURI><![CDATA[${config.appUrl}/vast?t=${encodeURIComponent(result.token)}]]></VASTAdTagURI></Wrapper></Ad></VAST>`;
+    adm=`<?xml version="1.0" encoding="UTF-8"?><VAST version="4.3"><Ad><Wrapper><AdSystem>ADPulse</AdSystem><VASTAdTagURI><![CDATA[${config.appUrl}/vast?t=${encodeURIComponent(result.token)}]]></VASTAdTagURI></Wrapper></Ad></VAST>`;
   }else{
     const img=campaign.image_url?`<img src="${campaign.image_url}" style="max-width:100%;height:auto;border:0" alt="">`:'';
     adm=`<a href="${config.appUrl}/r/click?t=${encodeURIComponent(result.token)}" target="_blank" rel="sponsored noopener">${img}<strong>${campaign.headline}</strong></a><img src="${config.appUrl}/vast/event?t=${encodeURIComponent(result.token)}&type=view" width="1" height="1" style="display:none">`;
