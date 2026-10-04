@@ -62,3 +62,18 @@ export async function writeConversion(row){
     created_at:new Date().toISOString().replace('T',' ').replace('Z','')
   }],format:'JSONEachRow'});
 }
+
+export async function mirrorSiteContext(row){
+  if(!pgPool)return;
+  await pgPool.query(`INSERT INTO production_site_context(site_id,category,language,topics,brand_safety,ai_summary,updated_at)
+    VALUES($1,$2,$3,$4::jsonb,$5,$6,NOW())
+    ON CONFLICT(site_id) DO UPDATE SET category=excluded.category,language=excluded.language,topics=excluded.topics,brand_safety=excluded.brand_safety,ai_summary=excluded.ai_summary,updated_at=NOW()`,
+    [row.siteId,row.category||'general',row.language||null,JSON.stringify(row.topics||[]),row.brandSafety||'standard',row.summary||null]);
+}
+
+export async function mirrorCampaignState(row){
+  if(!pgPool)return;
+  await pgPool.query(`INSERT INTO production_campaign_state(campaign_id,spent_total,spent_today,updated_at)
+    VALUES($1,$2,$3,NOW()) ON CONFLICT(campaign_id) DO UPDATE SET spent_total=excluded.spent_total,spent_today=excluded.spent_today,updated_at=NOW()`,
+    [row.campaignId,row.spentTotal||0,row.spentToday||0]);
+}
