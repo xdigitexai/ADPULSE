@@ -154,6 +154,21 @@ CREATE TABLE IF NOT EXISTS payment_transactions (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_payment_user ON payment_transactions(user_id, created_at);
+CREATE TABLE IF NOT EXISTS page_contexts (
+  id TEXT PRIMARY KEY,
+  site_id TEXT NOT NULL REFERENCES sites(id),
+  url_hash TEXT NOT NULL,
+  url TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT 'general',
+  topics TEXT NOT NULL DEFAULT '[]',
+  language TEXT,
+  brand_safety TEXT NOT NULL DEFAULT 'standard',
+  summary TEXT,
+  provider TEXT,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(site_id,url_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_page_context_site ON page_contexts(site_id,updated_at);
 CREATE TABLE IF NOT EXISTS support_conversations (
   id TEXT PRIMARY KEY,
   user_id TEXT REFERENCES users(id),
