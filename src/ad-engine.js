@@ -82,8 +82,12 @@ export function recordEvent({token,eventType,ip,userAgent,metadata={}}){
 }
 
 export function resetDailySpendIfNeeded(){
-  const key=one("SELECT value FROM (SELECT 'x' as value)")?.value;
-  const marker=one("SELECT note FROM ledger_entries WHERE type='SYSTEM_DAILY_MARKER' ORDER BY created_at DESC LIMIT 1");
-  if(marker?.note===today()) return;
-  run('UPDATE campaigns SET spent_today=0');
+  const current=today();
+  const marker=one("SELECT value FROM system_settings WHERE key='daily_spend_date'");
+  if(marker?.value===current) return;
+  const tx=db.transaction(()=>{
+    run('UPDATE campaigns SET spent_today=0');
+    run("INSERT INTO system_settings(key,value,updated_at) VALUES('daily_spend_date',?,CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP",[current]);
+  });
+  tx();
 }
