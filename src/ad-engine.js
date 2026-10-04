@@ -45,7 +45,7 @@ export async function chooseCampaign({zone,country='',device='desktop',ipHash=''
   const scored=eligible.map(c=>{
     const categoryBoost=json(c.target_categories).includes(effectiveCategory)?1.25:1;
     const bid=(c.model==='CPC'?c.cpc*10:c.cpm) || .01;
-    const rotationFactor=previousCampaignId&&c.id===previousCampaignId?.35:1;
+    const rotationFactor=(previousCampaignId && c.id===previousCampaignId) ? 0.35 : 1;
     return {c,score:bid*categoryBoost*Number(c._interestScore||1)*rotationFactor*(0.8+Math.random()*.4)};
   }).sort((a,b)=>b.score-a.score);
   return scored[0].c;
