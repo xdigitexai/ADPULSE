@@ -13,6 +13,7 @@ import { xdigitexPay, assertCurrency, assertGateway } from './xdigitex-pay.js';
 import { initProductionStores, productionStatus, writeConversion } from './production-store.js';
 import { classifyPage } from './context-ai.js';
 import { answerSupport } from './support-ai.js';
+import { fetchPublisherPath } from './safe-fetch.js';
 
 await initProductionStores().catch(err=>console.error('Production stores unavailable, continuing with local fallback:',err.message));
 await ensureAdmin();
@@ -110,13 +111,12 @@ app.post('/api/publisher/sites',auth('publisher'),(req,res)=>{
 app.post('/api/publisher/sites/:id/verify',auth('publisher'),wrap(async(req,res)=>{
   const site=one('SELECT * FROM sites WHERE id=?',[req.params.id]); requireOwner(site,req.user.id,'publisher_id');
   const method=req.body.method||'meta'; let verified=false, detail='';
-  const controller=new AbortController(); const timeout=setTimeout(()=>controller.abort(),7000);
   try{
     if(method==='meta'){
-      const r=await fetch(`https://${site.domain}/`,{signal:controller.signal,headers:{'user-agent':'ADPulseVerifier/1.0'}});
+      const r=await fetchPublisherPath(site.domain,'/',{headers:{'user-agent':'ADPulseVerifier/1.0'}});
       const html=await r.text(); verified=html.includes(site.verification_token); detail='meta';
     }else if(method==='file'){
-      const r=await fetch(`https://${site.domain}/adpulse-${site.verification_token}.txt`,{signal:controller.signal});
+      const r=await fetchPublisherPath(site.domain,`/adpulse-${site.verification_token}.txt`,{headers:{'user-agent':'ADPulseVerifier/1.0'}});
       verified=(await r.text()).trim()===site.verification_token; detail='file';
     }else if(method==='dns'){
       const records=await dns.resolveTxt(site.domain);
@@ -125,7 +125,7 @@ app.post('/api/publisher/sites/:id/verify',auth('publisher'),wrap(async(req,res)
     }else{
       return res.status(400).json({error:'Unsupported verification method'});
     }
-  } finally { clearTimeout(timeout); }
+  }
   if(verified) run("UPDATE sites SET status='pending_review',verification_method=? WHERE id=?",[method,site.id]);
   res.json({verified,status:verified?'pending_review':'pending_verification',method:detail});
 }));
@@ -148,20 +148,17 @@ app.post('/api/publisher/sites/:id/verify-ads-txt',auth('publisher'),wrap(async(
   const site=one('SELECT * FROM sites WHERE id=?',[req.params.id]); requireOwner(site,req.user.id,'publisher_id');
   if(site.status!=='approved') return res.status(400).json({error:'Site must be approved first'});
   const line=`${config.sellerDomain}, ${site.seller_id}, DIRECT`;
-  const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),7000);
   let found=false;
-  try{
-    const r=await fetch(`https://${site.domain}/ads.txt`,{signal:controller.signal,headers:{'user-agent':'ADPulseAdsTxtVerifier/1.0'}});
-    const body=await r.text();
-    found=body.split(/\r?\n/).map(x=>x.trim()).includes(line);
-  } finally { clearTimeout(timer); }
+  const r=await fetchPublisherPath(site.domain,'/ads.txt',{headers:{'user-agent':'ADPulseAdsTxtVerifier/1.0'}});
+  const body=await r.text();
+  found=body.split(/\r?\n/).map(x=>x.trim()).includes(line);
   run('UPDATE sites SET ads_txt_status=? WHERE id=?',[found?'verified':'missing',site.id]);
   res.json({verified:found,requiredLine:line,status:found?'verified':'missing'});
 }));
 
 app.post('/api/publisher/sites/:id/analyze',auth('publisher'),wrap(async(req,res)=>{
   const site=one('SELECT * FROM sites WHERE id=?',[req.params.id]); requireOwner(site,req.user.id,'publisher_id');
-  const r=await fetch(`https://${site.domain}/`,{headers:{'user-agent':'ADPulseContextBot/1.0'},signal:AbortSignal.timeout(8000)});
+  const r=await fetchPublisherPath(site.domain,'/',{headers:{'user-agent':'ADPulseContextBot/1.0'},timeoutMs:8000});
   const html=await r.text();
   const title=(html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1]||site.domain).trim();
   const text=html.replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').slice(0,20000);
