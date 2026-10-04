@@ -62,7 +62,7 @@
   }
 
   function clickUrl(token){
-    return base+'/r/click?t='+encodeURIComponent(token)+'&bid='+encodeURIComponent(browserId)+'&sid='+encodeURIComponent(sessionId)+'&pa='+(personalizationAllowed()?'1':'0');
+    return base+'/r/click?t='+encodeURIComponent(token)+'&bid='+encodeURIComponent(browserId)+'&sid='+encodeURIComponent(sessionId)+'&pa='+(personalizationAllowed()?'1':'0')+(previousCampaignId?'&prev='+encodeURIComponent(previousCampaignId):'');
   }
 
   function renderCreative(c,ad){
@@ -87,7 +87,7 @@
     return box;
   }
 
-  async function mount(el,refreshCount=0){
+  async function mount(el,refreshCount=0,previousCampaignId=''){
     const zone=el.dataset.zone;
     if(!zone)return;
     try{
@@ -133,7 +133,7 @@
           const active=document.visibilityState==='visible' && Date.now()-lastActivity<60000;
           if(active && currentRatio>=.5){
             io.disconnect();
-            mount(el,refreshCount+1);
+            mount(el,refreshCount+1,ad.campaign?.id||'');
           }else{
             clearTimeout(refreshTimer);
           }
