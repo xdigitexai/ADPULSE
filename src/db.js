@@ -151,6 +151,25 @@ CREATE TABLE IF NOT EXISTS payment_transactions (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_payment_user ON payment_transactions(user_id, created_at);
+CREATE TABLE IF NOT EXISTS support_conversations (
+  id TEXT PRIMARY KEY,
+  user_id TEXT REFERENCES users(id),
+  email TEXT,
+  name TEXT,
+  subject TEXT,
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS support_messages (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES support_conversations(id),
+  sender_type TEXT NOT NULL CHECK(sender_type IN ('user','admin','system')),
+  sender_id TEXT,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_support_conv ON support_messages(conversation_id, created_at);
 CREATE TABLE IF NOT EXISTS moderation (
   id TEXT PRIMARY KEY,
   object_type TEXT NOT NULL,
