@@ -7,7 +7,7 @@ const sdk=fs.readFileSync(new URL('../public/adpulse.js',import.meta.url),'utf8'
 async function fixture({type='display',visible=true,ratio=1}={}){
   let now=0;const timers=new Map(),calls=[],listeners={};let nextTimer=0;
   const element=()=>({style:{},dataset:{},children:[],setAttribute(){},appendChild(n){this.children.push(n)},replaceChildren(n){this.children=[n]}});
-  const slot=element();slot.dataset.zone='fixture-zone';
+  const slot=element();slot.dataset.zone='fixture-zone';slot.dataset.adpulseFormat='inline';
   const store=new Map();const storage={getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v)};
   const document={currentScript:{src:'https://ads.example.test/adpulse.js'},documentElement:{},visibilityState:visible?'visible':'hidden',createElement:element,querySelectorAll:()=>slot.dataset.adpulseMounted?[]:[slot]};
   const sandbox={document,window:{},URL,crypto:{randomUUID:()=> 'fixture-browser'},localStorage:storage,sessionStorage:storage,location:{href:'https://publisher.example.test/article'},navigator:{webdriver:false,language:'en'},screen:{width:1280,height:900},Intl,Date:class extends Date{static now(){return now}},performance:{now:()=>now},addEventListener:(name,fn)=>listeners[name]=fn,setTimeout:(f,ms)=>{const id=++nextTimer;timers.set(id,{f,ms});return id},clearTimeout:id=>timers.delete(id),IntersectionObserver:class{constructor(fn){this.fn=fn}observe(){this.fn([{intersectionRatio:ratio}])}disconnect(){}},MutationObserver:class{observe(){}},fetch:async(url,options)=>{

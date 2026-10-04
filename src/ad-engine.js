@@ -6,21 +6,23 @@ import { hashIp, deviceFromUA, scoreEvent } from './fraud.js';
 import { getFrequency, cacheFrequency, writeAdEvent } from './production-store.js';
 import { enrichIp } from './ip-intelligence.js';
 import { audienceFor, interestMatchScore, updateAudienceSignal } from './audience-engine.js';
+import {zoneDisplaySettings} from './display-settings.js';
 
 const json = (s) => { try{return JSON.parse(s||'[]')}catch{return []} };
 const today = () => new Date().toISOString().slice(0,10);
 
-export async function chooseCampaign({zone,country='',device='desktop',ipHash='',contextCategory='',browserId='',sessionId='',personalizationAllowed=false,previousCampaignId=''}) {
+export async function chooseCampaign({zone,country='',device='desktop',ipHash='',contextCategory='',browserId='',sessionId='',personalizationAllowed=false,previousCampaignId='',excludedCampaignIds=[]}) {
   const site=one('SELECT * FROM sites WHERE id=?',[zone.site_id]);
   const rows=all("SELECT c.* FROM campaigns c WHERE c.status='active' AND c.spent_total < c.budget_total");
   const effectiveCategory=contextCategory||site.category;
   const audience=audienceFor({browserId,sessionId,personalizationAllowed});
   const eligible=[];
   for(const c of rows){
+    if(excludedCampaignIds.includes(c.id))continue;
     if(c.is_house){
       if(!json(c.house_site_ids).includes(site.id)) continue;
       const type=['native','video'].includes(zone.format)?zone.format:'display';
-      if(c.creative_type!==type) continue;
+      if(zoneDisplaySettings(zone).displayMode!=='floating' && c.creative_type!==type) continue;
     }
     if(c.budget_daily>0 && c.spent_today>=c.budget_daily) continue;
     const now=new Date();
@@ -60,9 +62,10 @@ export async function chooseCampaign({zone,country='',device='desktop',ipHash=''
 export function signEvent(payload){ return jwt.sign(payload,config.eventSecret,{expiresIn:'30m'}); }
 export function verifyEvent(token){ return jwt.verify(token,config.eventSecret); }
 
-export async function makeAdRequest({zoneKey,ip,userAgent,country,contextToken='',browserId='',sessionId='',personalizationAllowed=false,previousCampaignId=''}) {
+export async function makeAdRequest({zoneKey,ip,userAgent,country,contextToken='',browserId='',sessionId='',personalizationAllowed=false,previousCampaignId='',excludedCampaignIds=[]}) {
   const zone=one("SELECT * FROM zones WHERE public_key=? AND status='active'",[zoneKey]);
   if(!zone) return {noFill:true,reason:'invalid_zone'};
+  if(zoneDisplaySettings(zone).pauseAds)return {noFill:true,reason:'placement_paused'};
   const site=one("SELECT * FROM sites WHERE id=? AND status='approved'",[zone.site_id]);
   if(!site) return {noFill:true,reason:'site_not_approved'};
   const device=deviceFromUA(userAgent);
@@ -71,7 +74,7 @@ export async function makeAdRequest({zoneKey,ip,userAgent,country,contextToken='
   if(contextToken){try{const parsed=verifyEvent(contextToken);if(parsed.type==='context'&&parsed.siteId===site.id)context={category:parsed.category||'',brandSafety:parsed.brandSafety||'standard',topics:parsed.topics||[]}}catch{}}
   if(context.brandSafety==='restricted') return {noFill:true,reason:'brand_safety'};
   const requestId=id('req'), eventId=id('evt'), ipHash=hashIp(ip);
-  const campaign=await chooseCampaign({zone,country,device,ipHash,contextCategory:context.category,browserId,sessionId,personalizationAllowed,previousCampaignId});
+  const campaign=await chooseCampaign({zone,country,device,ipHash,contextCategory:context.category,browserId,sessionId,personalizationAllowed,previousCampaignId,excludedCampaignIds});
   run("INSERT INTO ad_events(id,request_id,event_type,campaign_id,publisher_id,site_id,zone_id,ip_hash,user_agent,country,device,metadata) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
     [eventId,requestId,'request',campaign?.id||null,zone.publisher_id,zone.site_id,zone.id,ipHash,userAgent,country||null,device,JSON.stringify({context})]);
   void writeAdEvent({id:eventId,request_id:requestId,event_type:'request',campaign_id:campaign?.id||'',publisher_id:zone.publisher_id,site_id:zone.site_id,zone_id:zone.id,ip_hash:ipHash,country:country||'',device,risk_score:0,valid:1,bill_amount:0,publisher_amount:0}).catch(()=>{});
@@ -80,7 +83,7 @@ export async function makeAdRequest({zoneKey,ip,userAgent,country,contextToken='
   return {
     noFill:false,requestId,token,
     creative:{headline:campaign.headline,description:campaign.description,imageUrl:campaign.image_url,videoUrl:campaign.video_url,creativeType:campaign.creative_type||'display',destinationUrl:campaign.destination_url,width:zone.width,height:zone.height,format:zone.format},
-    zone:{refreshEnabled:!!zone.refresh_enabled,refreshIntervalSeconds:Number(zone.refresh_interval_seconds||45),refreshMax:Number(zone.refresh_max||3)},
+    zone:{refreshEnabled:!!zone.refresh_enabled,refreshIntervalSeconds:Number(zone.refresh_interval_seconds||45),refreshMax:Number(zone.refresh_max||3),displaySettings:zoneDisplaySettings(zone)},
     campaign:{id:campaign.id,model:campaign.model,currency:campaign.currency}
   };
 }

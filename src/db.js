@@ -261,6 +261,13 @@ if(!hasColumn('users','google_sub')) db.exec("ALTER TABLE users ADD COLUMN googl
 if(!hasColumn('zones','refresh_enabled')) db.exec("ALTER TABLE zones ADD COLUMN refresh_enabled INTEGER NOT NULL DEFAULT 0");
 if(!hasColumn('zones','refresh_interval_seconds')) db.exec("ALTER TABLE zones ADD COLUMN refresh_interval_seconds INTEGER NOT NULL DEFAULT 45");
 if(!hasColumn('zones','refresh_max')) db.exec("ALTER TABLE zones ADD COLUMN refresh_max INTEGER NOT NULL DEFAULT 3");
+if(!hasColumn('zones','display_settings')) db.exec("ALTER TABLE zones ADD COLUMN display_settings TEXT NOT NULL DEFAULT '{}'");
+db.exec(`CREATE TABLE IF NOT EXISTS ad_ux_events (
+  id TEXT PRIMARY KEY,request_id TEXT NOT NULL,campaign_id TEXT NOT NULL,
+  publisher_id TEXT NOT NULL,zone_id TEXT NOT NULL,event_type TEXT NOT NULL,
+  ip_hash TEXT,metadata TEXT NOT NULL DEFAULT '{}',created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(request_id,event_type)
+);CREATE INDEX IF NOT EXISTS idx_ux_publisher ON ad_ux_events(publisher_id,created_at);`);
 if(!hasColumn('campaigns','target_interests')) db.exec("ALTER TABLE campaigns ADD COLUMN target_interests TEXT NOT NULL DEFAULT '[]'");
 if(!hasColumn('campaigns','exclude_interests')) db.exec("ALTER TABLE campaigns ADD COLUMN exclude_interests TEXT NOT NULL DEFAULT '[]'");
 if(!hasColumn('ad_events','browser_id')) db.exec("ALTER TABLE ad_events ADD COLUMN browser_id TEXT");

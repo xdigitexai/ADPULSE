@@ -1,6 +1,8 @@
 (()=>{
   const script=document.currentScript;
   const base=new URL(script.src).origin;
+  if(window.__ADPULSE_LOADED__){if(script.dataset?.zone)window.ADPulse?.mountZone(script.dataset.zone);return;}
+  window.__ADPULSE_LOADED__=true;
   const viewedRequests=new Set();
   const contextCache=new Map();
   const signaledContexts=new Set();
@@ -70,7 +72,7 @@
     box.style.cssText='font-family:Arial,sans-serif;border:1px solid #e6e8ec;border-radius:10px;overflow:hidden;background:#fff;color:#111;max-width:100%;position:relative;'+(c.width?'width:'+c.width+'px;':'')+(c.height?'min-height:'+c.height+'px;':'');
     let media='';
     if(c.creativeType==='video'&&c.videoUrl){
-      media='<div style="position:relative;background:#000"><video src="'+esc(c.videoUrl)+'" muted playsinline controls style="width:100%;display:block;background:#000"></video><a href="'+clickUrl(ad.token)+'" target="_blank" rel="noopener sponsored" aria-label="'+esc(c.headline)+'" style="position:absolute;left:0;right:0;top:0;height:72%;display:block;cursor:pointer;background:transparent"></a></div>';
+      media='<div style="position:relative;background:#000"><video src="'+esc(c.videoUrl)+'" muted playsinline controls style="width:100%;display:block;background:#000"></video></div>';
     }else if(c.imageUrl){
       media='<img alt="" src="'+esc(c.imageUrl)+'" style="width:100%;display:block;max-height:'+(c.height||260)+'px;object-fit:cover">';
     }
@@ -91,6 +93,13 @@
     const zone=el.dataset.zone;
     if(!zone)return;
     try{
+      const placement=await fetch(base+'/zone-config?zone='+encodeURIComponent(zone)).then(r=>r.json());if(placement.enabled===false){el.dataset.adpulse='paused';return;}
+      if(!el.dataset.adpulseFormat&&placement.settings?.displayMode)el.dataset.adpulseFormat=placement.settings.displayMode;
+      if(refreshCount===0 && !['inline','banner','native'].includes(el.dataset.adpulseFormat)){
+        el.style.display='none';
+        const mod=await import(base+'/floating.js');
+        mod.mountFloating({zone,base,sendEvent,clickUrl,request:async(previous='',exclude=[])=>{const ctx=await contextFor(zone);if(ctx)signalAudience(ctx);return fetch(base+'/serve?zone='+encodeURIComponent(zone)+(ctx?.token?'&ctx='+encodeURIComponent(ctx.token):'')+'&bid='+encodeURIComponent(browserId)+'&sid='+encodeURIComponent(sessionId)+'&pa='+(personalizationAllowed()?'1':'0')+'&prev='+encodeURIComponent(previous)+'&exclude='+encodeURIComponent(exclude.join(',')),{credentials:'omit'}).then(r=>r.json());}});return;
+      }
       const ctx=await contextFor(zone);
       if(ctx)signalAudience(ctx);
       const url=base+'/serve?zone='+encodeURIComponent(zone)
@@ -105,18 +114,18 @@
       if(ad.noFill){el.dataset.adpulse='no-fill';return}
 
       el.dataset.adpulse='filled';
-      el.replaceChildren(renderCreative(ad.creative,ad));
+      const root=el.attachShadow?(el.shadowRoot||el.attachShadow({mode:'open'})):el;root.replaceChildren(renderCreative(ad.creative,ad));
       sendEvent(ad.token,'render',{pageUrl:location.href,refreshCount});
 
       let visibleSince=0,viewTimer=0,currentRatio=0,refreshTimer=0;
       const io=new IntersectionObserver(entries=>{
         for(const e of entries){
           currentRatio=e.intersectionRatio;
-          if(e.intersectionRatio>=.5){
+          if(e.intersectionRatio>=.5 && document.visibilityState==='visible'){
             if(!visibleSince)visibleSince=performance.now();
             clearTimeout(viewTimer);
             viewTimer=setTimeout(()=>{
-              if(visibleSince&&!viewedRequests.has(ad.requestId)&&performance.now()-visibleSince>=1000){
+              if(document.visibilityState==='visible'&&visibleSince&&!viewedRequests.has(ad.requestId)&&performance.now()-visibleSince>=1000){
                 viewedRequests.add(ad.requestId);
                 sendEvent(ad.token,'view',{visibilityPercent:Math.round(currentRatio*100),visibleMs:Math.round(performance.now()-visibleSince),pageUrl:location.href,refreshCount});
               }
@@ -144,12 +153,14 @@
   }
 
   function scan(){
-    document.querySelectorAll('.adpulse-ad:not([data-adpulse-mounted])').forEach(el=>{
+    document.querySelectorAll('.adpulse-ad:not([data-adpulse-mounted]),.adpulse-slot:not([data-adpulse-mounted])').forEach(el=>{
       el.dataset.adpulseMounted='1';
       mount(el,0);
     });
   }
 
+  window.ADPulse.mountZone=zone=>{const el=document.createElement('div');el.dataset.zone=zone;mount(el);};
+  if(script.dataset?.zone)window.ADPulse.mountZone(script.dataset.zone);
   scan();
   new MutationObserver(scan).observe(document.documentElement,{childList:true,subtree:true});
 })();

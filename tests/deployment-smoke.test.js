@@ -193,7 +193,20 @@ test('production deployment smoke: boot, uploads, accounts, accounting and provi
     const served=await api('/serve?zone='+zones['300x250'].publicKey,{headers});assert.equal(served.noFill,false);
     for(const type of ['view','click']){const e=await api('/events',{headers,body:{token:served.token,type,metadata:{visibleMs:2000,visibilityPercent:100}}});assert.equal(e.billAmount,0);assert.equal(e.publisherAmount,0);}
     assert.equal(one('SELECT COUNT(*) n FROM ledger_entries').n,before);
+    await api('/api/publisher/zones/'+zones.native.id+'/display-settings',{token:pub.token,body:{displayMode:'inline'}});
     assert.equal((await api('/serve?zone='+zones.native.publicKey,{headers})).noFill,true);
+    const config=await api('/zone-config?zone='+zones['300x250'].publicKey);assert.equal(config.settings.maxAdsPerSession,2);
+    await api('/api/publisher/zones/'+zones['300x250'].id+'/display-settings',{token:adv.token,body:{pauseAds:true},status:403});
+    await api('/api/publisher/zones/'+zones['300x250'].id+'/display-settings',{token:pub.token,body:{maxAdsPerSession:10},status:400});
+    await api('/api/publisher/zones/'+zones['300x250'].id+'/display-settings',{token:pub.token,body:{minPopupDelaySeconds:35,maxPopupDelaySeconds:12},status:400});
+    for(const type of ['dismiss','timeout_close','rotation']){const e=await api('/events',{headers,body:{token:served.token,type}});assert.equal(e.billAmount,0);assert.equal((await api('/events',{headers,body:{token:served.token,type}})).duplicate,true);}
+    assert.equal(one('SELECT COUNT(*) n FROM ledger_entries').n,before);
+    assert.equal((await api('/api/publisher/ux-analytics',{token:pub.token})).length,3);
+    assert.equal((await api('/serve?zone='+zones['300x250'].publicKey+'&exclude='+house.id,{headers})).noFill,true);
+    await api('/api/publisher/zones/'+zones['300x250'].id+'/display-settings',{token:pub.token,body:{pauseAds:true}});
+    assert.equal((await api('/zone-config?zone='+zones['300x250'].publicKey)).enabled,false);
+    assert.equal((await api('/serve?zone='+zones['300x250'].publicKey,{headers})).noFill,true);
+    await api('/api/publisher/zones/'+zones['300x250'].id+'/display-settings',{token:pub.token,body:{pauseAds:false}});
     run('UPDATE campaigns SET house_site_ids=? WHERE id=?',['[]',house.id]);
     assert.equal((await api('/serve?zone='+zones['300x250'].publicKey,{headers})).noFill,true);
   });

@@ -9,6 +9,7 @@ import multer from 'multer';
 import { z } from 'zod';
 import { RateLimiterMemory } from 'rate-limiter-flexible';
 import { config } from './config.js';
+import { zoneDisplaySettings, mergeDisplaySettings } from './display-settings.js';
 import { db, id, one, all, run, balanceFor, balancesFor, addLedger, ensureAdmin, finalizeMaturePublisherEarnings } from './db.js';
 import { register, login, loginWithGoogle, auth } from './auth.js';
 import { makeAdRequest, recordEvent, resetDailySpendIfNeeded, verifyEvent } from './ad-engine.js';
@@ -195,6 +196,19 @@ app.post('/api/publisher/zones',auth('publisher'),(req,res)=>{
 });
 
 app.get('/api/publisher/zones',auth('publisher'),(req,res)=>res.json(all('SELECT z.*,s.domain FROM zones z JOIN sites s ON s.id=z.site_id WHERE z.publisher_id=? ORDER BY z.created_at DESC',[req.user.id])));
+app.get('/api/publisher/zones/:id/display-settings',auth('publisher'),(req,res)=>{
+  const zone=one('SELECT * FROM zones WHERE id=?',[req.params.id]);requireOwner(zone,req.user.id,'publisher_id');res.json(zoneDisplaySettings(zone));
+});
+app.post('/api/publisher/zones/:id/display-settings',auth('publisher'),(req,res)=>{
+  const zone=one('SELECT * FROM zones WHERE id=?',[req.params.id]);requireOwner(zone,req.user.id,'publisher_id');
+  const settings=mergeDisplaySettings(zone,req.body);run('UPDATE zones SET display_settings=? WHERE id=?',[JSON.stringify(settings),zone.id]);res.json(settings);
+});
+app.get('/zone-config',(req,res)=>{
+  const zone=one('SELECT z.*,s.status AS site_status FROM zones z JOIN sites s ON s.id=z.site_id WHERE z.public_key=?',[String(req.query.zone||'')]);
+  if(!zone)return res.status(404).json({enabled:false});
+  const settings=zoneDisplaySettings(zone);res.set('Cache-Control','no-store').json({enabled:zone.status==='active'&&zone.site_status==='approved'&&!settings.pauseAds,settings});
+});
+app.get('/api/publisher/ux-analytics',auth('publisher'),(req,res)=>res.json(all('SELECT event_type,COUNT(*) AS count FROM ad_ux_events WHERE publisher_id=? GROUP BY event_type',[req.user.id])));
 app.get('/api/publisher/payout-minimums',auth('publisher'),(req,res)=>res.json(config.minimumPayouts));
 app.post('/api/publisher/zones/:id/status',auth('publisher'),(req,res)=>{
   const zone=one('SELECT * FROM zones WHERE id=?',[req.params.id]); requireOwner(zone,req.user.id,'publisher_id');
@@ -523,13 +537,20 @@ app.post('/openrtb2/auction',wrap(async(req,res)=>{
 }));
 
 app.get('/serve',wrap(async(req,res)=>{
-  const result=await makeAdRequest({zoneKey:String(req.query.zone||''),ip:req.ip,userAgent:req.get('user-agent')||'',country:req.get('cf-ipcountry')||'',contextToken:String(req.query.ctx||''),browserId:String(req.query.bid||''),sessionId:String(req.query.sid||''),personalizationAllowed:String(req.query.pa||'0')==='1',previousCampaignId:String(req.query.prev||'')});
+  const result=await makeAdRequest({zoneKey:String(req.query.zone||''),ip:req.ip,userAgent:req.get('user-agent')||'',country:req.get('cf-ipcountry')||'',contextToken:String(req.query.ctx||''),browserId:String(req.query.bid||''),sessionId:String(req.query.sid||''),personalizationAllowed:String(req.query.pa||'0')==='1',previousCampaignId:String(req.query.prev||''),excludedCampaignIds:String(req.query.exclude||'').split(',').filter(Boolean).slice(0,20)});
   res.set('Cache-Control','no-store').json(result);
 }));
 
 app.post('/events',wrap(async(req,res)=>{
-  const schema=z.object({token:z.string(),type:z.enum(['render','view','click','conversion']),metadata:z.record(z.any()).optional().default({})});
+  const schema=z.object({token:z.string(),type:z.enum(['render','view','click','conversion','dismiss','timeout_close','rotation']),metadata:z.record(z.any()).optional().default({})});
   const d=schema.parse(req.body);
+  if(['dismiss','timeout_close','rotation'].includes(d.type)){
+    const signed=verifyEvent(d.token);
+    const request=one("SELECT id FROM ad_events WHERE request_id=? AND campaign_id=? AND event_type='request'",[signed.requestId,signed.campaignId]);
+    if(!request)return res.status(404).json({error:'Ad request unavailable'});
+    const result=run('INSERT OR IGNORE INTO ad_ux_events(id,request_id,campaign_id,publisher_id,zone_id,event_type,ip_hash,metadata) VALUES(?,?,?,?,?,?,?,?)',[id('ux'),signed.requestId,signed.campaignId,signed.publisherId,signed.zoneId,d.type,hashIp(req.ip),JSON.stringify(d.metadata).slice(0,4096)]);
+    return res.json({ok:true,duplicate:result.changes===0,billAmount:0});
+  }
   const result=await recordEvent({token:d.token,eventType:d.type,ip:req.ip,userAgent:req.get('user-agent')||'',metadata:d.metadata});
   res.json(result);
 }));
