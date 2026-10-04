@@ -42,7 +42,13 @@ const requireOwner=(row,userId,field)=>{ if(!row || (row[field]!==userId)) throw
 const AD_FORMATS={responsive:[null,null],'300x250':[300,250],'336x280':[336,280],'728x90':[728,90],'970x250':[970,250],'320x50':[320,50],'320x100':[320,100],'300x600':[300,600],'160x600':[160,600],'native':[null,null],'video':[640,360]};
 const xmlEscape=x=>String(x??'').replace(/[<>&"']/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&apos;'}[c]));
 
-app.get('/api/health',(req,res)=>res.json({ok:true,service:'adpulse',version:'0.3.0',stores:productionStatus()}));
+app.get('/robots.txt',(req,res)=>res.type('text/plain').send(`User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /admin/\nSitemap: ${config.appUrl.replace(/\/$/,'')}/sitemap.xml\n`));
+app.get('/sitemap.xml',(req,res)=>{
+  const base=config.appUrl.replace(/\/$/,'');
+  const pages=['/','/policies.html','/privacy.html'];
+  res.type('application/xml').send(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${pages.map(p=>`<url><loc>${base}${p}</loc><changefreq>${p==='/'?'daily':'monthly'}</changefreq><priority>${p==='/'?'1.0':'0.5'}</priority></url>`).join('')}</urlset>`);
+});
+app.get('/api/health',(req,res)=>res.json({ok:true,service:'adpulse',version:'0.4.0',stores:productionStatus()}));
 app.get('/payment-return',(req,res)=>res.redirect('/?payment=return'));
 
 app.post('/api/auth/register',wrap(async(req,res)=>{const result=await register(req.body);run("INSERT INTO account_ip_history(id,user_id,ip_hash) VALUES(?,?,?) ON CONFLICT(user_id,ip_hash) DO UPDATE SET last_seen=CURRENT_TIMESTAMP",[id('aip'),result.user.id,hashIp(req.ip)]);res.status(201).json(result)}));
@@ -173,6 +179,7 @@ app.post('/api/publisher/zones',auth('publisher'),(req,res)=>{
 });
 
 app.get('/api/publisher/zones',auth('publisher'),(req,res)=>res.json(all('SELECT z.*,s.domain FROM zones z JOIN sites s ON s.id=z.site_id WHERE z.publisher_id=? ORDER BY z.created_at DESC',[req.user.id])));
+app.get('/api/publisher/payout-minimums',auth('publisher'),(req,res)=>res.json(config.minimumPayouts));
 app.post('/api/publisher/zones/:id/status',auth('publisher'),(req,res)=>{
   const zone=one('SELECT * FROM zones WHERE id=?',[req.params.id]); requireOwner(zone,req.user.id,'publisher_id');
   const status=z.enum(['active','paused']).parse(req.body.status);
