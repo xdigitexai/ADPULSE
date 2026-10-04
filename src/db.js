@@ -10,6 +10,8 @@ export const db = new Database(config.dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
+const hasColumn=(table,column)=>db.prepare(`PRAGMA table_info(${table})`).all().some(x=>x.name===column);
+
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
@@ -18,6 +20,9 @@ CREATE TABLE IF NOT EXISTS users (
   role TEXT NOT NULL CHECK(role IN ('advertiser','publisher','admin')),
   name TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active',
+  kyc_status TEXT NOT NULL DEFAULT 'not_started',
+  phone TEXT,
+  country TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS sites (
@@ -58,6 +63,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
   cpc REAL NOT NULL DEFAULT 0,
   budget_total REAL NOT NULL,
   budget_daily REAL NOT NULL,
+  currency TEXT NOT NULL DEFAULT 'USD',
   spent_total REAL NOT NULL DEFAULT 0,
   spent_today REAL NOT NULL DEFAULT 0,
   target_countries TEXT NOT NULL DEFAULT '[]',
@@ -107,6 +113,22 @@ CREATE TABLE IF NOT EXISTS system_settings (
   value TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS payment_transactions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  reference TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL CHECK(kind IN ('deposit','withdrawal')),
+  gateway TEXT,
+  amount REAL NOT NULL,
+  fee REAL NOT NULL DEFAULT 0,
+  net_amount REAL NOT NULL DEFAULT 0,
+  currency TEXT NOT NULL,
+  status TEXT NOT NULL,
+  provider_payload TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_payment_user ON payment_transactions(user_id, created_at);
 CREATE TABLE IF NOT EXISTS moderation (
   id TEXT PRIMARY KEY,
   object_type TEXT NOT NULL,
@@ -118,13 +140,22 @@ CREATE TABLE IF NOT EXISTS moderation (
 );
 `);
 
+if(!hasColumn('users','kyc_status')) db.exec("ALTER TABLE users ADD COLUMN kyc_status TEXT NOT NULL DEFAULT 'not_started'");
+if(!hasColumn('users','phone')) db.exec("ALTER TABLE users ADD COLUMN phone TEXT");
+if(!hasColumn('users','country')) db.exec("ALTER TABLE users ADD COLUMN country TEXT");
+if(!hasColumn('campaigns','currency')) db.exec("ALTER TABLE campaigns ADD COLUMN currency TEXT NOT NULL DEFAULT 'USD'");
+
 export function id(prefix='id') { return `${prefix}_${nanoid(16)}`; }
 export function one(sql, params=[]) { return db.prepare(sql).get(...params); }
 export function all(sql, params=[]) { return db.prepare(sql).all(...params); }
 export function run(sql, params=[]) { return db.prepare(sql).run(...params); }
 
-export function balanceFor(userId) {
-  return Number(one('SELECT COALESCE(SUM(amount),0) AS balance FROM ledger_entries WHERE user_id=? AND status IN ("finalized","available")',[userId]).balance || 0);
+export function balanceFor(userId,currency='USD') {
+  return Number(one('SELECT COALESCE(SUM(amount),0) AS balance FROM ledger_entries WHERE user_id=? AND currency=? AND status IN ("finalized","available")',[userId,String(currency).toUpperCase()]).balance || 0);
+}
+
+export function balancesFor(userId){
+  return all('SELECT currency,ROUND(COALESCE(SUM(amount),0),6) balance FROM ledger_entries WHERE user_id=? AND status IN ("finalized","available") GROUP BY currency ORDER BY currency',[userId]);
 }
 
 export function addLedger({userId,eventId=null,type,amount,currency='USD',status='finalized',note=null}) {
