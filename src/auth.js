@@ -2,7 +2,10 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { config } from './config.js';
+import { OAuth2Client } from 'google-auth-library';
 import { id, one, run } from './db.js';
+
+const googleClient=new OAuth2Client(config.googleClientId||undefined);
 
 const registerSchema = z.object({
   email:z.string().email(),
@@ -45,4 +48,30 @@ export function auth(requiredRole=null){
       req.user=user; next();
     }catch{ res.status(401).json({error:'Invalid or expired token'}); }
   };
+}
+
+
+export async function loginWithGoogle(credential,role='advertiser'){
+  if(!config.googleClientId) throw Object.assign(new Error('Google sign-in is not configured'),{status:503});
+  const ticket=await googleClient.verifyIdToken({idToken:String(credential||''),audience:config.googleClientId});
+  const payload=ticket.getPayload();
+  if(!payload?.sub || !payload?.email || !payload.email_verified) throw Object.assign(new Error('Google account email is not verified'),{status:401});
+  const email=String(payload.email).toLowerCase();
+  let user=one('SELECT * FROM users WHERE email=?',[email]);
+  if(!user){
+    if(!['advertiser','publisher'].includes(role)) role='advertiser';
+    const userId=id('usr');
+    const hash=await bcrypt.hash('google:'+payload.sub+':'+cryptoRandom(),12);
+    run('INSERT INTO users(id,email,password_hash,role,name,status,google_sub) VALUES(?,?,?,?,?,?,?)',[userId,email,hash,role,String(payload.name||email.split('@')[0]).slice(0,100),'active',payload.sub]);
+    user=one('SELECT * FROM users WHERE id=?',[userId]);
+  }else{
+    if(user.google_sub && user.google_sub!==payload.sub) throw Object.assign(new Error('Google identity does not match this account'),{status:409});
+    if(!user.google_sub) run('UPDATE users SET google_sub=? WHERE id=?',[payload.sub,user.id]);
+  }
+  if(user.status!=='active') throw Object.assign(new Error('Account unavailable'),{status:403});
+  return issueToken({id:user.id,email:user.email,role:user.role,name:user.name,status:user.status,kyc_status:user.kyc_status,phone:user.phone,country:user.country});
+}
+
+function cryptoRandom(){
+  return Math.random().toString(36).slice(2)+Date.now().toString(36);
 }
