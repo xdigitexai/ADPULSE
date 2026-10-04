@@ -1,0 +1,89 @@
+import crypto from 'node:crypto';
+import jwt from 'jsonwebtoken';
+import { config } from './config.js';
+import { all, one, run, id, addLedger, db, balanceFor } from './db.js';
+import { hashIp, deviceFromUA, scoreEvent } from './fraud.js';
+
+const json = (s) => { try{return JSON.parse(s||'[]')}catch{return []} };
+const today = () => new Date().toISOString().slice(0,10);
+
+export function chooseCampaign({zone,country='',device='desktop'}) {
+  const site=one('SELECT * FROM sites WHERE id=?',[zone.site_id]);
+  const rows=all("SELECT c.* FROM campaigns c WHERE c.status='active' AND c.spent_total < c.budget_total");
+  const eligible=rows.filter(c=>{
+    if(c.budget_daily>0 && c.spent_today>=c.budget_daily) return false;
+    const countries=json(c.target_countries), cats=json(c.target_categories), devices=json(c.target_devices);
+    if(countries.length && country && !countries.includes(country)) return false;
+    if(cats.length && !cats.includes(site.category)) return false;
+    if(devices.length && !devices.includes(device)) return false;
+    if(c.model!=='CPC' && c.cpm < Number(zone.floor_cpm||0)) return false;
+    const bal=balanceFor(c.advertiser_id);
+    if(bal<=0) return false;
+    return true;
+  });
+  if(!eligible.length) return null;
+  const scored=eligible.map(c=>{
+    const categoryBoost=json(c.target_categories).includes(site.category)?1.25:1;
+    const bid=(c.model==='CPC'?c.cpc*10:c.cpm) || .01;
+    return {c,score:bid*categoryBoost*(.8+Math.random()*.4)};
+  }).sort((a,b)=>b.score-a.score);
+  return scored[0].c;
+}
+
+export function signEvent(payload){ return jwt.sign(payload,config.eventSecret,{expiresIn:'30m'}); }
+export function verifyEvent(token){ return jwt.verify(token,config.eventSecret); }
+
+export function makeAdRequest({zoneKey,ip,userAgent,country}) {
+  const zone=one("SELECT * FROM zones WHERE public_key=? AND status='active'",[zoneKey]);
+  if(!zone) return {noFill:true,reason:'invalid_zone'};
+  const site=one("SELECT * FROM sites WHERE id=? AND status='approved'",[zone.site_id]);
+  if(!site) return {noFill:true,reason:'site_not_approved'};
+  const device=deviceFromUA(userAgent);
+  if(device==='bot') return {noFill:true,reason:'bot'};
+  const campaign=chooseCampaign({zone,country,device});
+  const requestId=id('req'), eventId=id('evt'), ipHash=hashIp(ip);
+  run("INSERT INTO ad_events(id,request_id,event_type,campaign_id,publisher_id,site_id,zone_id,ip_hash,user_agent,country,device,metadata) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+    [eventId,requestId,'request',campaign?.id||null,zone.publisher_id,zone.site_id,zone.id,ipHash,userAgent,country||null,device,'{}']);
+  if(!campaign) return {noFill:true,reason:'no_campaign',requestId};
+  const token=signEvent({requestId,campaignId:campaign.id,publisherId:zone.publisher_id,siteId:zone.site_id,zoneId:zone.id,ipHash});
+  return {
+    noFill:false,requestId,token,
+    creative:{headline:campaign.headline,description:campaign.description,imageUrl:campaign.image_url,destinationUrl:campaign.destination_url},
+    campaign:{id:campaign.id,model:campaign.model}
+  };
+}
+
+export function recordEvent({token,eventType,ip,userAgent,metadata={}}){
+  const signed=verifyEvent(token);
+  const ipHash=hashIp(ip);
+  const fraud=scoreEvent({ipHash,userAgent,eventType,requestId:signed.requestId,publisherId:signed.publisherId,metadata});
+  const campaign=one('SELECT * FROM campaigns WHERE id=?',[signed.campaignId]);
+  if(!campaign) throw Object.assign(new Error('Campaign unavailable'),{status:404});
+  let bill=0;
+  if(eventType==='view' && ['CPM','HYBRID'].includes(campaign.model)) bill=Number(campaign.cpm)/1000;
+  if(eventType==='click' && ['CPC','HYBRID'].includes(campaign.model)) bill=Number(campaign.cpc);
+  bill=Math.max(0,bill);
+  const advertiserBalance=balanceFor(campaign.advertiser_id);
+  const valid=fraud.valid && (bill===0 || advertiserBalance>=bill) && (campaign.spent_total+bill<=campaign.budget_total);
+  const publisherAmount=valid?bill*config.publisherRevenueShare:0;
+  const eventId=id('evt');
+
+  const tx=db.transaction(()=>{
+    run("INSERT INTO ad_events(id,request_id,event_type,campaign_id,publisher_id,site_id,zone_id,ip_hash,user_agent,risk_score,valid,bill_amount,publisher_amount,metadata) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      [eventId,signed.requestId,eventType,signed.campaignId,signed.publisherId,signed.siteId,signed.zoneId,ipHash,userAgent,fraud.score,valid?1:0,valid?bill:0,publisherAmount,JSON.stringify({...metadata,fraudReasons:fraud.reasons})]);
+    if(valid && bill>0){
+      run('UPDATE campaigns SET spent_total=spent_total+?, spent_today=spent_today+? WHERE id=?',[bill,bill,campaign.id]);
+      addLedger({userId:campaign.advertiser_id,eventId,type:'AD_CHARGE',amount:-bill,note:`${eventType} charge`});
+      addLedger({userId:signed.publisherId,eventId,type:'PUBLISHER_EARNING',amount:publisherAmount,status:'available',note:`${eventType} earning`});
+    }
+  });
+  tx();
+  return {eventId,valid,riskScore:fraud.score,reasons:fraud.reasons,billAmount:valid?bill:0,publisherAmount};
+}
+
+export function resetDailySpendIfNeeded(){
+  const key=one("SELECT value FROM (SELECT 'x' as value)")?.value;
+  const marker=one("SELECT note FROM ledger_entries WHERE type='SYSTEM_DAILY_MARKER' ORDER BY created_at DESC LIMIT 1");
+  if(marker?.note===today()) return;
+  run('UPDATE campaigns SET spent_today=0');
+}
