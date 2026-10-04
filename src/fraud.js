@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { all } from './db.js';
+import { all, one } from './db.js';
 
 export function hashIp(ip='') {
   return crypto.createHash('sha256').update(String(ip)).digest('hex').slice(0,32);
@@ -27,6 +27,10 @@ export function scoreEvent({ipHash,userAgent='',eventType,requestId,publisherId,
   const views=recent.filter(x=>x.event_type==='view').length;
   if(views>=120){score+=35;reasons.push('view_velocity');}
   if(eventType==='click' && clicks>=5){score+=45;reasons.push('click_velocity');}
+  if(eventType==='click'){
+    const self=one('SELECT id FROM account_ip_history WHERE user_id=? AND ip_hash=? LIMIT 1',[publisherId,ipHash]);
+    if(self){score+=100;reasons.push('publisher_self_click_ip');}
+  }
   if(eventType==='click' && campaignId){
     const ipCampaign=all("SELECT id FROM ad_events WHERE ip_hash=? AND campaign_id=? AND event_type='click' AND valid=1 AND created_at>=datetime('now','-1 day')",[ipHash,campaignId]).length;
     if(ipCampaign>=2){score+=100;reasons.push('repeat_ip_campaign_click');}
