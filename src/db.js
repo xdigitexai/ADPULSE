@@ -26,6 +26,15 @@ CREATE TABLE IF NOT EXISTS users (
   country TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS account_ip_history (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  ip_hash TEXT NOT NULL,
+  first_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(user_id,ip_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_account_ip_hash ON account_ip_history(ip_hash,user_id);
 CREATE TABLE IF NOT EXISTS sites (
   id TEXT PRIMARY KEY,
   publisher_id TEXT NOT NULL REFERENCES users(id),
