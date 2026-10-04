@@ -15,7 +15,8 @@ export const config = {
   demoMode: String(process.env.DEMO_MODE || 'false').toLowerCase() === 'true',
   xdigitexPayBaseUrl: process.env.XDIGITEX_PAY_BASE_URL || 'https://pay.xdigitex.space/api',
   xdigitexPayApiKey: process.env.XDIGITEX_PAY_API_KEY || '',
-  kycRequired: String(process.env.KYC_REQUIRED || 'true').toLowerCase() === 'true'
+  kycRequired: String(process.env.KYC_REQUIRED || 'true').toLowerCase() === 'true',
+  sellerDomain: process.env.ADPULSE_SELLER_DOMAIN || new URL(process.env.APP_URL || 'http://localhost:3000').hostname
 };
 
 if (config.env === 'production' && (config.jwtSecret.includes('change-me') || config.jwtSecret.length < 32)) {
