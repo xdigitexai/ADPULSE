@@ -275,8 +275,8 @@ app.post('/api/advertiser/campaigns/:id/status',auth('advertiser'),(req,res)=>{
 });
 app.post('/api/advertiser/campaigns/:id/budget',auth('advertiser'),(req,res)=>{
   const campaign=one('SELECT * FROM campaigns WHERE id=?',[req.params.id]); requireOwner(campaign,req.user.id,'advertiser_id');
-  const d=z.object({increaseBy:z.number().positive(),dailyBudget:z.number().positive().optional()}).parse(req.body);
-  const newTotal=Number(campaign.budget_total)+Number(d.increaseBy);
+  const d=z.object({increaseBy:z.number().min(0).default(0),dailyBudget:z.number().positive().optional()}).refine(x=>x.increaseBy>0||x.dailyBudget!==undefined,{message:'Provide increaseBy or dailyBudget'}).parse(req.body);
+  const newTotal=Number(campaign.budget_total)+Number(d.increaseBy||0);
   run('UPDATE campaigns SET budget_total=?,budget_daily=? WHERE id=?',[newTotal,d.dailyBudget??campaign.budget_daily,campaign.id]);
   res.json(one('SELECT * FROM campaigns WHERE id=?',[campaign.id]));
 });
