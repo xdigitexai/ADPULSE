@@ -165,7 +165,11 @@ app.post('/api/publisher/sites/:id/analyze',auth('publisher'),wrap(async(req,res
   res.json(result);
 }));
 
-app.get('/api/support/config',(req,res)=>res.json({email:config.supportEmail,whatsapp:config.supportWhatsapp,liveChat:config.supportChatEnabled}));
+app.get('/api/support/config',(req,res)=>{
+  const email=one("SELECT value FROM system_settings WHERE key='support_email'")?.value||config.supportEmail;
+  const whatsapp=one("SELECT value FROM system_settings WHERE key='support_whatsapp'")?.value||config.supportWhatsapp;
+  res.json({email,whatsapp,liveChat:config.supportChatEnabled});
+});
 
 app.post('/api/support/ai',wrap(async(req,res)=>{
   const schema=z.object({message:z.string().min(1).max(4000),role:z.string().optional()});
@@ -452,6 +456,22 @@ app.get('/r/click',wrap(async(req,res)=>{
   const target=new URL(campaign.destination_url); target.searchParams.set('_aprid',payload.requestId);
   res.redirect(302,target.toString());
 }));
+
+app.get('/api/admin/support/settings',auth('admin'),(req,res)=>{
+  res.json({
+    email:one("SELECT value FROM system_settings WHERE key='support_email'")?.value||config.supportEmail,
+    whatsapp:one("SELECT value FROM system_settings WHERE key='support_whatsapp'")?.value||config.supportWhatsapp
+  });
+});
+app.post('/api/admin/support/settings',auth('admin'),(req,res)=>{
+  const schema=z.object({email:z.string().email(),whatsapp:z.string().max(32).optional().default('')});
+  const d=schema.parse(req.body);
+  const tx=db.transaction(()=>{
+    run("INSERT INTO system_settings(key,value,updated_at) VALUES('support_email',?,CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP",[d.email]);
+    run("INSERT INTO system_settings(key,value,updated_at) VALUES('support_whatsapp',?,CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP",[d.whatsapp]);
+  }); tx();
+  res.json({ok:true,...d});
+});
 
 app.get('/api/admin/support',auth('admin'),(req,res)=>res.json(all("SELECT * FROM support_conversations ORDER BY updated_at DESC LIMIT 200")));
 app.get('/api/admin/support/:id',auth('admin'),(req,res)=>{
