@@ -362,6 +362,8 @@ app.post('/api/publisher/withdrawals',auth('publisher'),wrap(async(req,res)=>{
   if(config.kycRequired && req.user.kyc_status!=='verified') return res.status(403).json({error:'KYC verification is required before withdrawal'});
   const schema=z.object({amount:z.number().positive(),currency:z.string(),accountNumber:z.string().min(8).max(30)});
   const d=schema.parse(req.body),currency=assertCurrency(d.currency);
+  const minimum=Number(config.minimumPayouts?.[currency]||0);
+  if(minimum>0 && d.amount<minimum) return res.status(400).json({error:`Minimum payout for ${currency} is ${minimum}`});
   if(currency==='USD') return res.status(400).json({error:'Mobile-money withdrawal does not support USD on this route'});
   const reserve=Math.round(d.amount*1.03*1000000)/1000000;
   if(balanceFor(req.user.id,currency)<reserve) return res.status(400).json({error:'Insufficient balance including withdrawal fee'});
