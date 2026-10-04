@@ -16,7 +16,20 @@ export const config = {
   xdigitexPayBaseUrl: process.env.XDIGITEX_PAY_BASE_URL || 'https://pay.xdigitex.space/api',
   xdigitexPayApiKey: process.env.XDIGITEX_PAY_API_KEY || '',
   kycRequired: String(process.env.KYC_REQUIRED || 'true').toLowerCase() === 'true',
-  sellerDomain: process.env.ADPULSE_SELLER_DOMAIN || new URL(process.env.APP_URL || 'http://localhost:3000').hostname
+  sellerDomain: process.env.ADPULSE_SELLER_DOMAIN || new URL(process.env.APP_URL || 'http://localhost:3000').hostname,
+  databaseUrl: process.env.DATABASE_URL || '',
+  databaseSsl: String(process.env.DATABASE_SSL || 'false').toLowerCase()==='true',
+  redisUrl: process.env.REDIS_URL || '',
+  clickhouseUrl: process.env.CLICKHOUSE_URL || '',
+  clickhouseUser: process.env.CLICKHOUSE_USER || 'adpulse',
+  clickhousePassword: process.env.CLICKHOUSE_PASSWORD || '',
+  ipinfoToken: process.env.IPINFO_TOKEN || '',
+  aiContextUrl: process.env.AI_CONTEXT_API_URL || '',
+  aiContextKey: process.env.AI_CONTEXT_API_KEY || '',
+  aiContextModel: process.env.AI_CONTEXT_MODEL || '',
+  supportEmail: process.env.SUPPORT_EMAIL || 'sales@adpulse.example',
+  supportWhatsapp: process.env.SUPPORT_WHATSAPP || '',
+  supportChatEnabled: String(process.env.SUPPORT_CHAT_ENABLED || 'true').toLowerCase()==='true'
 };
 
 if (config.env === 'production' && (config.jwtSecret.includes('change-me') || config.jwtSecret.length < 32)) {
