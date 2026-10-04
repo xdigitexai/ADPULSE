@@ -27,7 +27,8 @@ const wrap=(fn)=>(req,res,next)=>Promise.resolve(fn(req,res,next)).catch(next);
 const normalizeDomain=(raw)=>new URL(raw.match(/^https?:\/\//)?raw:`https://${raw}`).hostname.toLowerCase().replace(/^www\./,'');
 const requireOwner=(row,userId,field)=>{ if(!row || (row[field]!==userId)) throw Object.assign(new Error('Not found'),{status:404}); };
 
-app.get('/api/health',(req,res)=>res.json({ok:true,service:'adpulse',version:'0.1.0'}));
+app.get('/api/health',(req,res)=>res.json({ok:true,service:'adpulse',version:'0.2.0'}));
+app.get('/payment-return',(req,res)=>res.redirect('/?payment=return'));
 
 app.post('/api/auth/register',wrap(async(req,res)=>res.status(201).json(await register(req.body))));
 app.post('/api/auth/login',wrap(async(req,res)=>res.json(await login(req.body.email,req.body.password))));
@@ -385,6 +386,39 @@ app.post('/api/admin/campaigns/:id/status',auth('admin'),(req,res)=>{
   run('INSERT INTO moderation(id,object_type,object_id,action,admin_id,note) VALUES(?,?,?,?,?,?)',[id('mod'),'campaign',campaign.id,status,req.user.id,req.body.note||null]);
   res.json({ok:true,status});
 });
+app.get('/api/admin/finance',auth('admin'),(req,res)=>{
+  const totals=all(`SELECT currency,
+    ROUND(SUM(CASE WHEN kind='deposit' AND status='completed' THEN net_amount ELSE 0 END),2) deposits,
+    ROUND(SUM(CASE WHEN kind='withdrawal' AND status IN ('processing','completed') THEN amount+fee ELSE 0 END),2) withdrawals
+    FROM payment_transactions GROUP BY currency ORDER BY currency`);
+  const recent=all('SELECT p.*,u.email FROM payment_transactions p JOIN users u ON u.id=p.user_id ORDER BY p.created_at DESC LIMIT 200');
+  res.json({totals,recent});
+});
+
+app.post('/api/admin/finance/reconcile',auth('admin'),wrap(async(req,res)=>{
+  const pendingDeposits=all("SELECT reference FROM payment_transactions WHERE kind='deposit' AND status IN ('pending','processing')");
+  let depositsChecked=0,withdrawalsChecked=0,reversed=0;
+  for(const p of pendingDeposits){ await finalizeDeposit(p.reference); depositsChecked++; }
+
+  const provider=await xdigitexPay.withdrawals();
+  const rows=Array.isArray(provider?.data)?provider.data:[];
+  for(const remote of rows){
+    const local=one("SELECT * FROM payment_transactions WHERE reference=? AND kind='withdrawal'",[remote.reference]);
+    if(!local) continue;
+    withdrawalsChecked++;
+    const next=remote.status||local.status;
+    if(next==='failed' && local.status!=='failed'){
+      const already=one("SELECT id FROM ledger_entries WHERE event_id=? AND type='WITHDRAWAL_REVERSAL'",[local.id]);
+      if(!already){
+        addLedger({userId:local.user_id,eventId:local.id,type:'WITHDRAWAL_REVERSAL',amount:Number(local.amount)+Number(local.fee||0),currency:local.currency,note:'Provider withdrawal failed'});
+        reversed++;
+      }
+    }
+    run('UPDATE payment_transactions SET status=?,provider_payload=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',[next,JSON.stringify(remote),local.id]);
+  }
+  res.json({ok:true,depositsChecked,withdrawalsChecked,reversed});
+}));
+
 app.get('/api/admin/fraud',auth('admin'),(req,res)=>res.json(all(`SELECT publisher_id,COUNT(*) events,
   SUM(CASE WHEN valid=0 THEN 1 ELSE 0 END) invalid_events,
   ROUND(100.0*SUM(CASE WHEN valid=0 THEN 1 ELSE 0 END)/COUNT(*),2) invalid_rate,
