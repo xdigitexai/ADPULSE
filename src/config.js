@@ -12,7 +12,10 @@ export const config = {
   publisherRevenueShare: Math.min(.9, Math.max(.5, num(process.env.PUBLISHER_REVENUE_SHARE, .75))),
   adminEmail: process.env.ADMIN_EMAIL || 'admin@adpulse.local',
   adminPassword: process.env.ADMIN_PASSWORD || 'ChangeMe123!',
-  demoMode: String(process.env.DEMO_MODE || 'false').toLowerCase() === 'true'
+  demoMode: String(process.env.DEMO_MODE || 'false').toLowerCase() === 'true',
+  xdigitexPayBaseUrl: process.env.XDIGITEX_PAY_BASE_URL || 'https://pay.xdigitex.space/api',
+  xdigitexPayApiKey: process.env.XDIGITEX_PAY_API_KEY || '',
+  kycRequired: String(process.env.KYC_REQUIRED || 'true').toLowerCase() === 'true'
 };
 
 if (config.env === 'production' && (config.jwtSecret.includes('change-me') || config.jwtSecret.length < 32)) {
