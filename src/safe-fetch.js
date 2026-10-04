@@ -1,7 +1,7 @@
 import dns from 'node:dns/promises';
 import ipaddr from 'ipaddr.js';
 
-function isPublicIp(value){
+export function isPublicIp(value){
   try{
     const addr=ipaddr.parse(value);
     const range=addr.range();
