@@ -26,6 +26,8 @@
     "@clickhouse/client": "^1.11.2",
     "pg": "^8.13.1",
     "redis": "^4.7.0",
-    "ipaddr.js": "^2.2.0"
+    "ipaddr.js": "^2.2.0",
+    "google-auth-library": "^10.3.0",
+    "multer": "^2.0.2"
   }
 }
