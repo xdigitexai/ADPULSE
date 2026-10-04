@@ -8,7 +8,7 @@ import { RateLimiterMemory } from 'rate-limiter-flexible';
 import { config } from './config.js';
 import { db, id, one, all, run, balanceFor, balancesFor, addLedger, ensureAdmin } from './db.js';
 import { register, login, auth } from './auth.js';
-import { makeAdRequest, recordEvent, resetDailySpendIfNeeded } from './ad-engine.js';
+import { makeAdRequest, recordEvent, resetDailySpendIfNeeded, verifyEvent } from './ad-engine.js';
 import { xdigitexPay, assertCurrency, assertGateway } from './xdigitex-pay.js';
 import { initProductionStores, productionStatus, writeConversion } from './production-store.js';
 import { classifyPage } from './context-ai.js';
@@ -31,6 +31,7 @@ const wrap=(fn)=>(req,res,next)=>Promise.resolve(fn(req,res,next)).catch(next);
 const normalizeDomain=(raw)=>new URL(raw.match(/^https?:\/\//)?raw:`https://${raw}`).hostname.toLowerCase().replace(/^www\./,'');
 const requireOwner=(row,userId,field)=>{ if(!row || (row[field]!==userId)) throw Object.assign(new Error('Not found'),{status:404}); };
 const AD_FORMATS={responsive:[null,null],'300x250':[300,250],'336x280':[336,280],'728x90':[728,90],'970x250':[970,250],'320x50':[320,50],'320x100':[320,100],'300x600':[300,600],'160x600':[160,600],'native':[null,null],'video':[640,360]};
+const xmlEscape=x=>String(x??'').replace(/[<>&"']/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&apos;'}[c]));
 
 app.get('/api/health',(req,res)=>res.json({ok:true,service:'adpulse',version:'0.3.0',stores:productionStatus()}));
 app.get('/payment-return',(req,res)=>res.redirect('/?payment=return'));
@@ -349,6 +350,43 @@ app.post('/api/conversions',auth('advertiser'),(req,res)=>{
   }
   res.status(201).json({id:cid,accepted:true});
 });
+
+app.get('/vast',wrap(async(req,res)=>{
+  const token=String(req.query.t||'');
+  const payload=verifyEvent(token);
+  const campaign=one('SELECT * FROM campaigns WHERE id=?',[payload.campaignId]);
+  if(!campaign || campaign.creative_type!=='video' || !campaign.video_url) return res.status(404).type('application/xml').send('<VAST version="4.2"></VAST>');
+  const impression=`${config.appUrl}/vast/event?t=${encodeURIComponent(token)}&type=view`;
+  const click=`${config.appUrl}/r/click?t=${encodeURIComponent(token)}`;
+  const xml=`<?xml version="1.0" encoding="UTF-8"?><VAST version="4.2"><Ad id="${xmlEscape(campaign.id)}"><InLine><AdSystem version="1.0">ADPulse</AdSystem><AdTitle>${xmlEscape(campaign.headline)}</AdTitle><Impression><![CDATA[${impression}]]></Impression><Creatives><Creative><Linear><Duration>00:00:30</Duration><MediaFiles><MediaFile delivery="progressive" type="video/mp4"><![CDATA[${campaign.video_url}]]></MediaFile></MediaFiles><VideoClicks><ClickThrough><![CDATA[${click}]]></ClickThrough></VideoClicks></Linear></Creative></Creatives></InLine></Ad></VAST>`;
+  res.type('application/xml').send(xml);
+}));
+
+app.get('/vast/event',wrap(async(req,res)=>{
+  const token=String(req.query.t||'');
+  const type=String(req.query.type||'view')==='click'?'click':'view';
+  await recordEvent({token,eventType:type,ip:req.ip,userAgent:req.get('user-agent')||'',metadata:{vast:true,visibilityPercent:100,visibleMs:2000}});
+  res.status(204).end();
+}));
+
+app.post('/openrtb2/auction',wrap(async(req,res)=>{
+  const bid=req.body||{}, imp=Array.isArray(bid.imp)?bid.imp[0]:null;
+  if(!bid.id || !imp) return res.status(400).json({error:'Invalid OpenRTB request'});
+  const zoneKey=String(imp.tagid||imp?.ext?.adpulse_zone||'');
+  if(!zoneKey) return res.status(400).json({error:'imp.tagid or imp.ext.adpulse_zone is required'});
+  const result=await makeAdRequest({zoneKey,ip:req.ip,userAgent:req.get('user-agent')||'',country:req.get('cf-ipcountry')||bid?.device?.geo?.country||''});
+  if(result.noFill) return res.status(204).end();
+  const campaign=one('SELECT * FROM campaigns WHERE id=?',[result.campaign.id]);
+  const price=Number(campaign.model==='CPC'?campaign.cpc*10:campaign.cpm||0.01);
+  let adm='';
+  if(campaign.creative_type==='video'){
+    adm=`<?xml version="1.0" encoding="UTF-8"?><VAST version="4.2"><Ad><Wrapper><AdSystem>ADPulse</AdSystem><VASTAdTagURI><![CDATA[${config.appUrl}/vast?t=${encodeURIComponent(result.token)}]]></VASTAdTagURI></Wrapper></Ad></VAST>`;
+  }else{
+    const img=campaign.image_url?`<img src="${campaign.image_url}" style="max-width:100%;height:auto;border:0" alt="">`:'';
+    adm=`<a href="${config.appUrl}/r/click?t=${encodeURIComponent(result.token)}" target="_blank" rel="sponsored noopener">${img}<strong>${campaign.headline}</strong></a><img src="${config.appUrl}/vast/event?t=${encodeURIComponent(result.token)}&type=view" width="1" height="1" style="display:none">`;
+  }
+  res.json({id:String(bid.id),seatbid:[{seat:'adpulse',bid:[{id:`bid_${crypto.randomBytes(8).toString('hex')}`,impid:String(imp.id||'1'),price,adm,adomain:[new URL(campaign.destination_url).hostname],cid:campaign.id,crid:campaign.id,w:imp?.banner?.w||undefined,h:imp?.banner?.h||undefined,ext:{adpulse:{request_id:result.requestId}}}]}],cur:campaign.currency||'USD'});
+}));
 
 app.get('/serve',wrap(async(req,res)=>{
   const result=await makeAdRequest({zoneKey:String(req.query.zone||''),ip:req.ip,userAgent:req.get('user-agent')||'',country:req.get('cf-ipcountry')||''});
