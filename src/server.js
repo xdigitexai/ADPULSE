@@ -443,7 +443,7 @@ app.post('/openrtb2/auction',wrap(async(req,res)=>{
 }));
 
 app.get('/serve',wrap(async(req,res)=>{
-  const result=await makeAdRequest({zoneKey:String(req.query.zone||''),ip:req.ip,userAgent:req.get('user-agent')||'',country:req.get('cf-ipcountry')||''});
+  const result=await makeAdRequest({zoneKey:String(req.query.zone||''),ip:req.ip,userAgent:req.get('user-agent')||'',country:req.get('cf-ipcountry')||'',contextToken:String(req.query.ctx||'')});
   res.set('Cache-Control','no-store').json(result);
 }));
 
