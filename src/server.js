@@ -16,6 +16,7 @@ import { answerSupport } from './support-ai.js';
 import { classifyPageForZone } from './page-context.js';
 import { hashIp } from './fraud.js';
 import { fetchPublisherPath, safeFetchUrl } from './safe-fetch.js';
+import { updateAudienceSignal, isSensitiveInterest } from './audience-engine.js';
 
 const storeState=await initProductionStores().catch(err=>{console.error('Production stores unavailable:',err.message);return {postgres:false,redis:false,clickhouse:false}});
 if(config.productionStoresRequired && (!storeState.postgres || !storeState.redis || !storeState.clickhouse)) throw new Error('PRODUCTION_STORES_REQUIRED is enabled but one or more production stores are unavailable');
@@ -88,6 +89,22 @@ app.get('/context',wrap(async(req,res)=>{
   res.set('Cache-Control','private, max-age=300').json(result);
 }));
 
+app.post('/audience/signal',(req,res)=>{
+  const schema=z.object({
+    contextToken:z.string(),
+    browserId:z.string().max(128).optional().default(''),
+    sessionId:z.string().max(128).optional().default(''),
+    personalizationAllowed:z.boolean().default(false),
+    weight:z.number().min(.01).max(.5).default(.12)
+  });
+  const d=schema.parse(req.body);
+  let ctx;
+  try{ctx=verifyEvent(d.contextToken)}catch{return res.status(400).json({error:'Invalid context token'})}
+  if(ctx.type!=='context') return res.status(400).json({error:'Invalid context token type'});
+  updateAudienceSignal({browserId:d.browserId,sessionId:d.sessionId,topics:ctx.topics||[],category:ctx.category||'',personalizationAllowed:d.personalizationAllowed,weight:d.weight});
+  res.status(204).end();
+});
+
 app.get('/sellers.json',(req,res)=>{
   const sellers=all("SELECT DISTINCT u.id,u.name,s.seller_id FROM sites s JOIN users u ON u.id=s.publisher_id WHERE s.status='approved' AND s.seller_id IS NOT NULL");
   res.json({
@@ -140,12 +157,13 @@ app.post('/api/publisher/sites/:id/verify',auth('publisher'),wrap(async(req,res)
 app.get('/api/publisher/sites',auth('publisher'),(req,res)=>res.json(all('SELECT * FROM sites WHERE publisher_id=? ORDER BY created_at DESC',[req.user.id])));
 
 app.post('/api/publisher/zones',auth('publisher'),(req,res)=>{
-  const schema=z.object({siteId:z.string(),name:z.string().min(2),format:z.enum(['responsive','300x250','336x280','728x90','970x250','320x50','320x100','300x600','160x600','native','video']).default('responsive'),floorCpm:z.number().min(0).default(0)});
+  const schema=z.object({siteId:z.string(),name:z.string().min(2),format:z.enum(['responsive','300x250','336x280','728x90','970x250','320x50','320x100','300x600','160x600','native','video']).default('responsive'),floorCpm:z.number().min(0).default(0),refreshEnabled:z.boolean().default(false),refreshIntervalSeconds:z.number().int().min(30).max(300).default(45),refreshMax:z.number().int().min(0).max(10).default(3)});
   const d=schema.parse(req.body), site=one('SELECT * FROM sites WHERE id=?',[d.siteId]); requireOwner(site,req.user.id,'publisher_id');
   if(site.status!=='approved') return res.status(400).json({error:'Site must be approved before creating live zones'});
   const zone={id:id('zone'),publicKey:`z_${crypto.randomBytes(10).toString('hex')}`};
   const [width,height]=AD_FORMATS[d.format];
-  run('INSERT INTO zones(id,site_id,publisher_id,name,format,width,height,floor_cpm,public_key) VALUES(?,?,?,?,?,?,?,?,?)',[zone.id,site.id,req.user.id,d.name,d.format,width,height,d.floorCpm,zone.publicKey]);
+  const refreshEnabled=['native','video'].includes(d.format)?0:(d.refreshEnabled?1:0);
+  run('INSERT INTO zones(id,site_id,publisher_id,name,format,width,height,floor_cpm,refresh_enabled,refresh_interval_seconds,refresh_max,public_key) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',[zone.id,site.id,req.user.id,d.name,d.format,width,height,d.floorCpm,refreshEnabled,d.refreshIntervalSeconds,d.refreshMax,zone.publicKey]);
   res.status(201).json({...zone,embed:`<div class="adpulse-ad" data-zone="${zone.publicKey}"></div><script async src="${config.appUrl}/adpulse.js"></script>`});
 });
 
@@ -216,15 +234,16 @@ app.post('/api/advertiser/campaigns',auth('advertiser'),(req,res)=>{
   const schema=z.object({
     name:z.string().min(2),destinationUrl:z.string().url(),headline:z.string().min(2).max(120),description:z.string().max(240).optional().default(''),imageUrl:z.string().url().optional().or(z.literal('')),videoUrl:z.string().url().optional().or(z.literal('')),creativeType:z.enum(['display','native','video']).default('display'),
     model:z.enum(['CPM','CPC','HYBRID']),currency:z.enum(['KES','CDF','UGX','XOF','XAF','RWF','ZMW','SLE','USD']).default('USD'),cpm:z.number().min(0).default(0),cpc:z.number().min(0).default(0),budgetTotal:z.number().positive(),budgetDaily:z.number().positive(),frequencyCapDaily:z.number().int().min(1).max(50).default(3),conversionWindowDays:z.number().int().min(1).max(30).default(7),startsAt:z.string().optional(),endsAt:z.string().optional(),
-    countries:z.array(z.string()).default([]),categories:z.array(z.string()).default([]),devices:z.array(z.string()).default([])
+    countries:z.array(z.string()).default([]),categories:z.array(z.string()).default([]),devices:z.array(z.string()).default([]),interests:z.array(z.string()).default([]),excludeInterests:z.array(z.string()).default([])
   });
   const d=schema.parse(req.body);
   if(d.model!=='CPC' && d.cpm<=0) return res.status(400).json({error:'CPM must be greater than zero'});
   if(d.model!=='CPM' && d.cpc<=0) return res.status(400).json({error:'CPC must be greater than zero'});
+  if(d.interests.some(isSensitiveInterest)) return res.status(400).json({error:'Sensitive interests cannot be used for persistent audience targeting. Use contextual category targeting instead.'});
   const cid=id('cmp'), publicKey=`cmp_${crypto.randomBytes(12).toString('hex')}`;
-  run(`INSERT INTO campaigns(id,advertiser_id,name,destination_url,headline,description,image_url,video_url,creative_type,model,cpm,cpc,budget_total,budget_daily,currency,target_countries,target_categories,target_devices,status,frequency_cap_daily,conversion_window_days,starts_at,ends_at,public_key)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending_review',?,?,?,?,?)`,
-    [cid,req.user.id,d.name,d.destinationUrl,d.headline,d.description,d.imageUrl||null,d.videoUrl||null,d.creativeType,d.model,d.cpm,d.cpc,d.budgetTotal,d.budgetDaily,d.currency,JSON.stringify(d.countries),JSON.stringify(d.categories),JSON.stringify(d.devices),d.frequencyCapDaily,d.conversionWindowDays,d.startsAt||null,d.endsAt||null,publicKey]);
+  run(`INSERT INTO campaigns(id,advertiser_id,name,destination_url,headline,description,image_url,video_url,creative_type,model,cpm,cpc,budget_total,budget_daily,currency,target_countries,target_categories,target_devices,target_interests,exclude_interests,status,frequency_cap_daily,conversion_window_days,starts_at,ends_at,public_key)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending_review',?,?,?,?,?)`,
+    [cid,req.user.id,d.name,d.destinationUrl,d.headline,d.description,d.imageUrl||null,d.videoUrl||null,d.creativeType,d.model,d.cpm,d.cpc,d.budgetTotal,d.budgetDaily,d.currency,JSON.stringify(d.countries),JSON.stringify(d.categories),JSON.stringify(d.devices),JSON.stringify(d.interests),JSON.stringify(d.excludeInterests),d.frequencyCapDaily,d.conversionWindowDays,d.startsAt||null,d.endsAt||null,publicKey]);
   res.status(201).json(one('SELECT * FROM campaigns WHERE id=?',[cid]));
 });
 
@@ -446,7 +465,7 @@ app.post('/openrtb2/auction',wrap(async(req,res)=>{
 }));
 
 app.get('/serve',wrap(async(req,res)=>{
-  const result=await makeAdRequest({zoneKey:String(req.query.zone||''),ip:req.ip,userAgent:req.get('user-agent')||'',country:req.get('cf-ipcountry')||'',contextToken:String(req.query.ctx||'')});
+  const result=await makeAdRequest({zoneKey:String(req.query.zone||''),ip:req.ip,userAgent:req.get('user-agent')||'',country:req.get('cf-ipcountry')||'',contextToken:String(req.query.ctx||''),browserId:String(req.query.bid||''),sessionId:String(req.query.sid||''),personalizationAllowed:String(req.query.pa||'0')==='1'});
   res.set('Cache-Control','no-store').json(result);
 }));
 
