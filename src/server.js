@@ -478,7 +478,7 @@ app.post('/events',wrap(async(req,res)=>{
 
 app.get('/r/click',wrap(async(req,res)=>{
   const token=String(req.query.t||'');
-  const result=await recordEvent({token,eventType:'click',ip:req.ip,userAgent:req.get('user-agent')||'',metadata:{redirect:true,browserId:String(req.query.bid||''),sessionId:String(req.query.sid||'')}});
+  const result=await recordEvent({token,eventType:'click',ip:req.ip,userAgent:req.get('user-agent')||'',metadata:{redirect:true,browserId:String(req.query.bid||''),sessionId:String(req.query.sid||''),personalizationAllowed:String(req.query.pa||'0')==='1'}});
   const payload=await import('jsonwebtoken').then(m=>m.default.verify(token,config.eventSecret));
   const campaign=one('SELECT destination_url FROM campaigns WHERE id=?',[payload.campaignId]);
   if(!campaign) return res.status(404).send('Campaign unavailable');
