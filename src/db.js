@@ -174,6 +174,13 @@ if(!hasColumn('campaigns','frequency_cap_daily')) db.exec("ALTER TABLE campaigns
 if(!hasColumn('campaigns','conversion_window_days')) db.exec("ALTER TABLE campaigns ADD COLUMN conversion_window_days INTEGER NOT NULL DEFAULT 7");
 if(!hasColumn('campaigns','public_key')) db.exec("ALTER TABLE campaigns ADD COLUMN public_key TEXT");
 
+for(const row of db.prepare("SELECT id FROM campaigns WHERE public_key IS NULL OR public_key='' ").all()){
+  db.prepare('UPDATE campaigns SET public_key=? WHERE id=?').run(`cmp_${nanoid(24)}`,row.id);
+}
+for(const row of db.prepare("SELECT id FROM sites WHERE seller_id IS NULL OR seller_id='' ").all()){
+  db.prepare('UPDATE sites SET seller_id=? WHERE id=?').run(`PUB-${nanoid(10).toUpperCase()}`,row.id);
+}
+
 export function id(prefix='id') { return `${prefix}_${nanoid(16)}`; }
 export function one(sql, params=[]) { return db.prepare(sql).get(...params); }
 export function all(sql, params=[]) { return db.prepare(sql).all(...params); }
