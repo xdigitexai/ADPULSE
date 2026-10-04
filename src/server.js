@@ -13,6 +13,7 @@ import { xdigitexPay, assertCurrency, assertGateway } from './xdigitex-pay.js';
 import { initProductionStores, productionStatus, writeConversion, mirrorSiteContext } from './production-store.js';
 import { classifyPage } from './context-ai.js';
 import { answerSupport } from './support-ai.js';
+import { classifyPageForZone } from './page-context.js';
 import { fetchPublisherPath, safeFetchUrl } from './safe-fetch.js';
 
 const storeState=await initProductionStores().catch(err=>{console.error('Production stores unavailable:',err.message);return {postgres:false,redis:false,clickhouse:false}});
@@ -79,6 +80,11 @@ app.get('/api/dashboard',auth(),(req,res)=>{
     pendingCampaigns:all("SELECT c.*,u.email advertiser_email FROM campaigns c JOIN users u ON u.id=c.advertiser_id WHERE c.status='pending_review' ORDER BY c.created_at DESC LIMIT 20")
   });
 });
+
+app.get('/context',wrap(async(req,res)=>{
+  const result=await classifyPageForZone({zoneKey:String(req.query.zone||''),pageUrl:String(req.query.url||'')});
+  res.set('Cache-Control','private, max-age=300').json(result);
+}));
 
 app.get('/sellers.json',(req,res)=>{
   const sellers=all("SELECT DISTINCT u.id,u.name,s.seller_id FROM sites s JOIN users u ON u.id=s.publisher_id WHERE s.status='approved' AND s.seller_id IS NOT NULL");
