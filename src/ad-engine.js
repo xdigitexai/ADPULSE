@@ -64,8 +64,8 @@ export async function makeAdRequest({zoneKey,ip,userAgent,country}) {
   const token=signEvent({requestId,campaignId:campaign.id,publisherId:zone.publisher_id,siteId:zone.site_id,zoneId:zone.id,ipHash});
   return {
     noFill:false,requestId,token,
-    creative:{headline:campaign.headline,description:campaign.description,imageUrl:campaign.image_url,destinationUrl:campaign.destination_url},
-    campaign:{id:campaign.id,model:campaign.model}
+    creative:{headline:campaign.headline,description:campaign.description,imageUrl:campaign.image_url,videoUrl:campaign.video_url,creativeType:campaign.creative_type||'display',destinationUrl:campaign.destination_url,width:zone.width,height:zone.height,format:zone.format},
+    campaign:{id:campaign.id,model:campaign.model,currency:campaign.currency}
   };
 }
 
