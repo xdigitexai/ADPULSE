@@ -25,6 +25,7 @@ export function updateAudienceSignal({browserId,sessionId,topics=[],category='',
         VALUES(?,?,?,?,CURRENT_TIMESTAMP)
         ON CONFLICT(browser_id) DO UPDATE SET personalization_allowed=excluded.personalization_allowed,storage_allowed=excluded.storage_allowed,updated_at=CURRENT_TIMESTAMP`,
         [browserId,personalizationAllowed?1:0,1,personalizationAllowed?1:0]);
+      if(!personalizationAllowed) run('DELETE FROM audience_interests WHERE browser_id=?',[browserId]);
     }
     for(const topic of unique){
       if(sessionId){
