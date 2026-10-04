@@ -35,6 +35,10 @@ CREATE TABLE IF NOT EXISTS sites (
   category TEXT DEFAULT 'general',
   language TEXT DEFAULT 'en',
   quality_score REAL NOT NULL DEFAULT 50,
+  seller_id TEXT,
+  ads_txt_status TEXT NOT NULL DEFAULT 'missing',
+  topics TEXT NOT NULL DEFAULT '[]',
+  brand_safety TEXT NOT NULL DEFAULT 'standard',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS zones (
@@ -72,6 +76,8 @@ CREATE TABLE IF NOT EXISTS campaigns (
   status TEXT NOT NULL DEFAULT 'draft',
   starts_at TEXT,
   ends_at TEXT,
+  frequency_cap_daily INTEGER NOT NULL DEFAULT 3,
+  conversion_window_days INTEGER NOT NULL DEFAULT 7,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS ad_events (
@@ -113,6 +119,21 @@ CREATE TABLE IF NOT EXISTS system_settings (
   value TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS conversions (
+  id TEXT PRIMARY KEY,
+  campaign_id TEXT NOT NULL REFERENCES campaigns(id),
+  advertiser_id TEXT NOT NULL REFERENCES users(id),
+  request_id TEXT,
+  click_event_id TEXT,
+  event_name TEXT NOT NULL,
+  value REAL NOT NULL DEFAULT 0,
+  currency TEXT NOT NULL DEFAULT 'USD',
+  external_id TEXT,
+  metadata TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(advertiser_id, external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_conversions_campaign ON conversions(campaign_id, created_at);
 CREATE TABLE IF NOT EXISTS payment_transactions (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id),
@@ -144,6 +165,12 @@ if(!hasColumn('users','kyc_status')) db.exec("ALTER TABLE users ADD COLUMN kyc_s
 if(!hasColumn('users','phone')) db.exec("ALTER TABLE users ADD COLUMN phone TEXT");
 if(!hasColumn('users','country')) db.exec("ALTER TABLE users ADD COLUMN country TEXT");
 if(!hasColumn('campaigns','currency')) db.exec("ALTER TABLE campaigns ADD COLUMN currency TEXT NOT NULL DEFAULT 'USD'");
+if(!hasColumn('sites','seller_id')) db.exec("ALTER TABLE sites ADD COLUMN seller_id TEXT");
+if(!hasColumn('sites','ads_txt_status')) db.exec("ALTER TABLE sites ADD COLUMN ads_txt_status TEXT NOT NULL DEFAULT 'missing'");
+if(!hasColumn('sites','topics')) db.exec("ALTER TABLE sites ADD COLUMN topics TEXT NOT NULL DEFAULT '[]'");
+if(!hasColumn('sites','brand_safety')) db.exec("ALTER TABLE sites ADD COLUMN brand_safety TEXT NOT NULL DEFAULT 'standard'");
+if(!hasColumn('campaigns','frequency_cap_daily')) db.exec("ALTER TABLE campaigns ADD COLUMN frequency_cap_daily INTEGER NOT NULL DEFAULT 3");
+if(!hasColumn('campaigns','conversion_window_days')) db.exec("ALTER TABLE campaigns ADD COLUMN conversion_window_days INTEGER NOT NULL DEFAULT 7");
 
 export function id(prefix='id') { return `${prefix}_${nanoid(16)}`; }
 export function one(sql, params=[]) { return db.prepare(sql).get(...params); }
