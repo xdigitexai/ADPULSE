@@ -161,6 +161,7 @@ CREATE TABLE IF NOT EXISTS support_conversations (
   name TEXT,
   subject TEXT,
   status TEXT NOT NULL DEFAULT 'open',
+  access_token TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -197,6 +198,7 @@ if(!hasColumn('campaigns','conversion_window_days')) db.exec("ALTER TABLE campai
 if(!hasColumn('campaigns','public_key')) db.exec("ALTER TABLE campaigns ADD COLUMN public_key TEXT");
 if(!hasColumn('campaigns','video_url')) db.exec("ALTER TABLE campaigns ADD COLUMN video_url TEXT");
 if(!hasColumn('campaigns','creative_type')) db.exec("ALTER TABLE campaigns ADD COLUMN creative_type TEXT NOT NULL DEFAULT 'display'");
+if(!hasColumn('support_conversations','access_token')) db.exec("ALTER TABLE support_conversations ADD COLUMN access_token TEXT");
 
 for(const row of db.prepare("SELECT id FROM campaigns WHERE public_key IS NULL OR public_key='' ").all()){
   db.prepare('UPDATE campaigns SET public_key=? WHERE id=?').run(`cmp_${nanoid(24)}`,row.id);
