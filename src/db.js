@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
   ends_at TEXT,
   frequency_cap_daily INTEGER NOT NULL DEFAULT 3,
   conversion_window_days INTEGER NOT NULL DEFAULT 7,
+  public_key TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS ad_events (
@@ -171,6 +172,7 @@ if(!hasColumn('sites','topics')) db.exec("ALTER TABLE sites ADD COLUMN topics TE
 if(!hasColumn('sites','brand_safety')) db.exec("ALTER TABLE sites ADD COLUMN brand_safety TEXT NOT NULL DEFAULT 'standard'");
 if(!hasColumn('campaigns','frequency_cap_daily')) db.exec("ALTER TABLE campaigns ADD COLUMN frequency_cap_daily INTEGER NOT NULL DEFAULT 3");
 if(!hasColumn('campaigns','conversion_window_days')) db.exec("ALTER TABLE campaigns ADD COLUMN conversion_window_days INTEGER NOT NULL DEFAULT 7");
+if(!hasColumn('campaigns','public_key')) db.exec("ALTER TABLE campaigns ADD COLUMN public_key TEXT");
 
 export function id(prefix='id') { return `${prefix}_${nanoid(16)}`; }
 export function one(sql, params=[]) { return db.prepare(sql).get(...params); }
