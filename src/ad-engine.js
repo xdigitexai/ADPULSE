@@ -10,7 +10,7 @@ import { audienceFor, interestMatchScore, updateAudienceSignal } from './audienc
 const json = (s) => { try{return JSON.parse(s||'[]')}catch{return []} };
 const today = () => new Date().toISOString().slice(0,10);
 
-export async function chooseCampaign({zone,country='',device='desktop',ipHash='',contextCategory='',browserId='',sessionId='',personalizationAllowed=false}) {
+export async function chooseCampaign({zone,country='',device='desktop',ipHash='',contextCategory='',browserId='',sessionId='',personalizationAllowed=false,previousCampaignId=''}) {
   const site=one('SELECT * FROM sites WHERE id=?',[zone.site_id]);
   const rows=all("SELECT c.* FROM campaigns c WHERE c.status='active' AND c.spent_total < c.budget_total");
   const effectiveCategory=contextCategory||site.category;
@@ -45,7 +45,8 @@ export async function chooseCampaign({zone,country='',device='desktop',ipHash=''
   const scored=eligible.map(c=>{
     const categoryBoost=json(c.target_categories).includes(effectiveCategory)?1.25:1;
     const bid=(c.model==='CPC'?c.cpc*10:c.cpm) || .01;
-    return {c,score:bid*categoryBoost*Number(c._interestScore||1)*(0.8+Math.random()*.4)};
+    const rotationFactor=previousCampaignId&&c.id===previousCampaignId?.35:1;
+    return {c,score:bid*categoryBoost*Number(c._interestScore||1)*rotationFactor*(0.8+Math.random()*.4)};
   }).sort((a,b)=>b.score-a.score);
   return scored[0].c;
 }
@@ -53,7 +54,7 @@ export async function chooseCampaign({zone,country='',device='desktop',ipHash=''
 export function signEvent(payload){ return jwt.sign(payload,config.eventSecret,{expiresIn:'30m'}); }
 export function verifyEvent(token){ return jwt.verify(token,config.eventSecret); }
 
-export async function makeAdRequest({zoneKey,ip,userAgent,country,contextToken='',browserId='',sessionId='',personalizationAllowed=false}) {
+export async function makeAdRequest({zoneKey,ip,userAgent,country,contextToken='',browserId='',sessionId='',personalizationAllowed=false,previousCampaignId=''}) {
   const zone=one("SELECT * FROM zones WHERE public_key=? AND status='active'",[zoneKey]);
   if(!zone) return {noFill:true,reason:'invalid_zone'};
   const site=one("SELECT * FROM sites WHERE id=? AND status='approved'",[zone.site_id]);
@@ -64,7 +65,7 @@ export async function makeAdRequest({zoneKey,ip,userAgent,country,contextToken='
   if(contextToken){try{const parsed=verifyEvent(contextToken);if(parsed.type==='context'&&parsed.siteId===site.id)context={category:parsed.category||'',brandSafety:parsed.brandSafety||'standard',topics:parsed.topics||[]}}catch{}}
   if(context.brandSafety==='restricted') return {noFill:true,reason:'brand_safety'};
   const requestId=id('req'), eventId=id('evt'), ipHash=hashIp(ip);
-  const campaign=await chooseCampaign({zone,country,device,ipHash,contextCategory:context.category,browserId,sessionId,personalizationAllowed});
+  const campaign=await chooseCampaign({zone,country,device,ipHash,contextCategory:context.category,browserId,sessionId,personalizationAllowed,previousCampaignId});
   run("INSERT INTO ad_events(id,request_id,event_type,campaign_id,publisher_id,site_id,zone_id,ip_hash,user_agent,country,device,metadata) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
     [eventId,requestId,'request',campaign?.id||null,zone.publisher_id,zone.site_id,zone.id,ipHash,userAgent,country||null,device,JSON.stringify({context})]);
   void writeAdEvent({id:eventId,request_id:requestId,event_type:'request',campaign_id:campaign?.id||'',publisher_id:zone.publisher_id,site_id:zone.site_id,zone_id:zone.id,ip_hash:ipHash,country:country||'',device,risk_score:0,valid:1,bill_amount:0,publisher_amount:0}).catch(()=>{});
