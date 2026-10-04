@@ -77,7 +77,8 @@ export async function recordEvent({token,eventType,ip,userAgent,metadata={}}){
   const signed=verifyEvent(token);
   const ipHash=hashIp(ip);
   const intel=await enrichIp(ip);
-  const fraud=scoreEvent({ipHash,userAgent,eventType,requestId:signed.requestId,publisherId:signed.publisherId,metadata});
+  const browserId=String(metadata.browserId||'').slice(0,128), sessionId=String(metadata.sessionId||'').slice(0,128);
+  const fraud=scoreEvent({ipHash,userAgent,eventType,requestId:signed.requestId,publisherId:signed.publisherId,campaignId:signed.campaignId,browserId,sessionId,metadata});
   fraud.score+=Number(intel.risk||0); fraud.reasons.push(...(intel.reasons||[])); fraud.valid=fraud.score<80;
   const campaign=one('SELECT * FROM campaigns WHERE id=?',[signed.campaignId]);
   if(!campaign) throw Object.assign(new Error('Campaign unavailable'),{status:404});
@@ -92,12 +93,12 @@ export async function recordEvent({token,eventType,ip,userAgent,metadata={}}){
   const eventId=id('evt');
 
   const tx=db.transaction(()=>{
-    run("INSERT INTO ad_events(id,request_id,event_type,campaign_id,publisher_id,site_id,zone_id,ip_hash,user_agent,risk_score,valid,bill_amount,publisher_amount,metadata) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-      [eventId,signed.requestId,eventType,signed.campaignId,signed.publisherId,signed.siteId,signed.zoneId,ipHash,userAgent,fraud.score,valid?1:0,valid?bill:0,publisherAmount,JSON.stringify({...metadata,fraudReasons:fraud.reasons,network:{source:intel.source,asn:intel.asn,asnName:intel.asnName,asnType:intel.asnType,vpn:intel.vpn,proxy:intel.proxy,tor:intel.tor,hosting:intel.hosting,relay:intel.relay}})]);
+    run("INSERT INTO ad_events(id,request_id,event_type,campaign_id,publisher_id,site_id,zone_id,ip_hash,user_agent,browser_id,session_id,risk_score,valid,bill_amount,publisher_amount,metadata) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      [eventId,signed.requestId,eventType,signed.campaignId,signed.publisherId,signed.siteId,signed.zoneId,ipHash,userAgent,browserId||null,sessionId||null,fraud.score,valid?1:0,valid?bill:0,publisherAmount,JSON.stringify({...metadata,fraudReasons:fraud.reasons,network:{source:intel.source,asn:intel.asn,asnName:intel.asnName,asnType:intel.asnType,vpn:intel.vpn,proxy:intel.proxy,tor:intel.tor,hosting:intel.hosting,relay:intel.relay}})]);
     if(valid && bill>0){
       run('UPDATE campaigns SET spent_total=spent_total+?, spent_today=spent_today+? WHERE id=?',[bill,bill,campaign.id]);
       addLedger({userId:campaign.advertiser_id,eventId,type:'AD_CHARGE',amount:-bill,currency,note:`${eventType} charge`});
-      addLedger({userId:signed.publisherId,eventId,type:'PUBLISHER_EARNING',amount:publisherAmount,currency,status:'available',note:`${eventType} earning`});
+      addLedger({userId:signed.publisherId,eventId,type:'PUBLISHER_EARNING',amount:publisherAmount,currency,status:'pending',note:`${eventType} earning — 24h fraud review`});
     }
   });
   tx();
