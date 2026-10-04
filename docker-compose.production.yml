@@ -1,0 +1,50 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      clickhouse: { condition: service_healthy }
+    ports: ["3000:3000"]
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: adpulse
+      POSTGRES_USER: adpulse
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    volumes: [postgres_data:/var/lib/postgresql/data, ./infra/postgres.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro]
+    healthcheck:
+      test: ["CMD-SHELL","pg_isready -U adpulse -d adpulse"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server","--appendonly","yes"]
+    volumes: [redis_data:/data]
+    healthcheck:
+      test: ["CMD","redis-cli","ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+  clickhouse:
+    image: clickhouse/clickhouse-server:25
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: adpulse
+      CLICKHOUSE_USER: adpulse
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-change-me}
+    volumes: [clickhouse_data:/var/lib/clickhouse, ./infra/clickhouse.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro]
+    healthcheck:
+      test: ["CMD-SHELL","wget -qO- http://localhost:8123/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+volumes:
+  postgres_data:
+  redis_data:
+  clickhouse_data:
