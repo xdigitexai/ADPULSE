@@ -7,7 +7,8 @@
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "test": "node --test tests/*.test.js",
-    "check": "node --check src/server.js && node --check src/ad-engine.js && node --check src/db.js && node --check src/production-store.js && node --check src/page-context.js && node --check public/app.js && node --check public/adpulse.js"
+    "check": "node --check src/server.js && node --check src/ad-engine.js && node --check src/db.js && node --check src/production-store.js && node --check src/page-context.js && node --check public/app.js && node --check public/workspace.js && node --check public/adpulse.js",
+    "build": "node scripts/build-frontend.js"
   },
   "engines": {
     "node": ">=20"

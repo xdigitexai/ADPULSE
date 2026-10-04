@@ -44,6 +44,9 @@ app.use(cors());
 app.use(helmet({contentSecurityPolicy:false,crossOriginResourcePolicy:{policy:'cross-origin'}}));
 app.use(express.json({limit:'512kb'}));
 app.get(['/','/index.html'],(req,res)=>{
+  // GIS popup fallback needs its opener to survive cross-origin navigation.
+  res.setHeader('Cross-Origin-Opener-Policy','same-origin-allow-popups');
+  res.setHeader('Referrer-Policy','strict-origin-when-cross-origin');
   const canonical=new URL('/',config.appUrl).href.replace(/&/g,'&amp;').replace(/"/g,'&quot;');
   const html=fs.readFileSync('public/index.html','utf8').replace('</head>',`<link rel="canonical" href="${canonical}"><meta property="og:url" content="${canonical}"></head>`);
   res.type('html').send(html);

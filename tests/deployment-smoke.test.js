@@ -42,6 +42,15 @@ test('production deployment smoke: boot, uploads, accounts, accounting and provi
   };
   let ready=false;for(let i=0;i<100;i++){try{const r=await fetch(base+'/api/health');if(r.ok){ready=true;break}}catch{}await new Promise(r=>setTimeout(r,100));}
   assert.ok(ready,'Application did not boot: '+logs);
+  await t.test('frontend module entry and Google popup-compatible HTML headers',async()=>{
+    const page=await fetch(base+'/');
+    assert.equal(page.headers.get('cross-origin-opener-policy'),'same-origin-allow-popups');
+    assert.equal(page.headers.get('referrer-policy'),'strict-origin-when-cross-origin');
+    assert.ok((await page.text()).includes('src="/app.js"'));
+    assert.equal((await fetch(base+'/workspace.js')).status,200);
+    const health=await fetch(base+'/api/health');
+    assert.equal(health.headers.get('cross-origin-opener-policy'),'same-origin');
+  });
   const admin=(await api('/api/auth/login',{body:{email:process.env.ADMIN_EMAIL,password:process.env.ADMIN_PASSWORD}})).token;
   const accounts={};
   for(const role of ['advertiser','publisher'])accounts[role]=await api('/api/auth/register',{body:{role,email:role+'@example.test',name:'Smoke '+role,password:'Smoke-password-2026!'},status:201});
