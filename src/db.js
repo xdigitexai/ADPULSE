@@ -60,6 +60,9 @@ CREATE TABLE IF NOT EXISTS zones (
   width INTEGER,
   height INTEGER,
   floor_cpm REAL NOT NULL DEFAULT 0,
+  refresh_enabled INTEGER NOT NULL DEFAULT 0,
+  refresh_interval_seconds INTEGER NOT NULL DEFAULT 45,
+  refresh_max INTEGER NOT NULL DEFAULT 3,
   status TEXT NOT NULL DEFAULT 'active',
   public_key TEXT NOT NULL UNIQUE,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -85,6 +88,8 @@ CREATE TABLE IF NOT EXISTS campaigns (
   target_countries TEXT NOT NULL DEFAULT '[]',
   target_categories TEXT NOT NULL DEFAULT '[]',
   target_devices TEXT NOT NULL DEFAULT '[]',
+  target_interests TEXT NOT NULL DEFAULT '[]',
+  exclude_interests TEXT NOT NULL DEFAULT '[]',
   status TEXT NOT NULL DEFAULT 'draft',
   starts_at TEXT,
   ends_at TEXT,
@@ -167,6 +172,29 @@ CREATE TABLE IF NOT EXISTS payment_transactions (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_payment_user ON payment_transactions(user_id, created_at);
+CREATE TABLE IF NOT EXISTS audience_interests (
+  browser_id TEXT NOT NULL,
+  topic TEXT NOT NULL,
+  score REAL NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(browser_id,topic)
+);
+CREATE INDEX IF NOT EXISTS idx_audience_interest_topic ON audience_interests(topic,score);
+CREATE TABLE IF NOT EXISTS session_interests (
+  session_id TEXT NOT NULL,
+  topic TEXT NOT NULL,
+  score REAL NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(session_id,topic)
+);
+CREATE INDEX IF NOT EXISTS idx_session_interest_updated ON session_interests(updated_at);
+CREATE TABLE IF NOT EXISTS audience_privacy (
+  browser_id TEXT PRIMARY KEY,
+  personalization_allowed INTEGER NOT NULL DEFAULT 0,
+  measurement_allowed INTEGER NOT NULL DEFAULT 1,
+  storage_allowed INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS page_contexts (
   id TEXT PRIMARY KEY,
   site_id TEXT NOT NULL REFERENCES sites(id),
@@ -226,6 +254,11 @@ if(!hasColumn('campaigns','conversion_window_days')) db.exec("ALTER TABLE campai
 if(!hasColumn('campaigns','public_key')) db.exec("ALTER TABLE campaigns ADD COLUMN public_key TEXT");
 if(!hasColumn('campaigns','video_url')) db.exec("ALTER TABLE campaigns ADD COLUMN video_url TEXT");
 if(!hasColumn('campaigns','creative_type')) db.exec("ALTER TABLE campaigns ADD COLUMN creative_type TEXT NOT NULL DEFAULT 'display'");
+if(!hasColumn('zones','refresh_enabled')) db.exec("ALTER TABLE zones ADD COLUMN refresh_enabled INTEGER NOT NULL DEFAULT 0");
+if(!hasColumn('zones','refresh_interval_seconds')) db.exec("ALTER TABLE zones ADD COLUMN refresh_interval_seconds INTEGER NOT NULL DEFAULT 45");
+if(!hasColumn('zones','refresh_max')) db.exec("ALTER TABLE zones ADD COLUMN refresh_max INTEGER NOT NULL DEFAULT 3");
+if(!hasColumn('campaigns','target_interests')) db.exec("ALTER TABLE campaigns ADD COLUMN target_interests TEXT NOT NULL DEFAULT '[]'");
+if(!hasColumn('campaigns','exclude_interests')) db.exec("ALTER TABLE campaigns ADD COLUMN exclude_interests TEXT NOT NULL DEFAULT '[]'");
 if(!hasColumn('ad_events','browser_id')) db.exec("ALTER TABLE ad_events ADD COLUMN browser_id TEXT");
 if(!hasColumn('ad_events','session_id')) db.exec("ALTER TABLE ad_events ADD COLUMN session_id TEXT");
 if(!hasColumn('support_conversations','access_token')) db.exec("ALTER TABLE support_conversations ADD COLUMN access_token TEXT");
