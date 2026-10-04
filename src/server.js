@@ -465,7 +465,7 @@ app.post('/openrtb2/auction',wrap(async(req,res)=>{
 }));
 
 app.get('/serve',wrap(async(req,res)=>{
-  const result=await makeAdRequest({zoneKey:String(req.query.zone||''),ip:req.ip,userAgent:req.get('user-agent')||'',country:req.get('cf-ipcountry')||'',contextToken:String(req.query.ctx||''),browserId:String(req.query.bid||''),sessionId:String(req.query.sid||''),personalizationAllowed:String(req.query.pa||'0')==='1'});
+  const result=await makeAdRequest({zoneKey:String(req.query.zone||''),ip:req.ip,userAgent:req.get('user-agent')||'',country:req.get('cf-ipcountry')||'',contextToken:String(req.query.ctx||''),browserId:String(req.query.bid||''),sessionId:String(req.query.sid||''),personalizationAllowed:String(req.query.pa||'0')==='1',previousCampaignId:String(req.query.prev||'')});
   res.set('Cache-Control','no-store').json(result);
 }));
 
