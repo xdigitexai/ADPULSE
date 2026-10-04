@@ -8,6 +8,8 @@ services:
       redis: { condition: service_healthy }
       clickhouse: { condition: service_healthy }
     ports: ["3000:3000"]
+    volumes:
+      - upload_data:/app/public/uploads
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -48,3 +50,4 @@ volumes:
   postgres_data:
   redis_data:
   clickhouse_data:
+  upload_data:
