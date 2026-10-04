@@ -33,7 +33,8 @@ export const config = {
   productionStoresRequired: String(process.env.PRODUCTION_STORES_REQUIRED || 'false').toLowerCase()==='true',
   googleClientId: process.env.GOOGLE_CLIENT_ID || '',
   uploadDir: process.env.UPLOAD_DIR || './public/uploads',
-  minimumPayoutUsd: num(process.env.MINIMUM_PAYOUT_USD,5)
+  minimumPayoutUsd: num(process.env.MINIMUM_PAYOUT_USD,5),
+  minimumPayouts: (()=>{try{return JSON.parse(process.env.MINIMUM_PAYOUTS_JSON||'{"KES":500,"UGX":18000,"RWF":7000,"CDF":12000,"XOF":3000,"XAF":3000,"ZMW":120,"SLE":120}')}catch{return {KES:500,UGX:18000,RWF:7000,CDF:12000,XOF:3000,XAF:3000,ZMW:120,SLE:120}}})()
 };
 
 if (config.env === 'production' && (config.jwtSecret.includes('change-me') || config.jwtSecret.length < 32)) {
