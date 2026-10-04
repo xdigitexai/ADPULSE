@@ -5,9 +5,10 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 import { RateLimiterMemory } from 'rate-limiter-flexible';
 import { config } from './config.js';
-import { db, id, one, all, run, balanceFor, addLedger, ensureAdmin } from './db.js';
+import { db, id, one, all, run, balanceFor, balancesFor, addLedger, ensureAdmin } from './db.js';
 import { register, login, auth } from './auth.js';
 import { makeAdRequest, recordEvent, resetDailySpendIfNeeded } from './ad-engine.js';
+import { xdigitexPay, assertCurrency, assertGateway } from './xdigitex-pay.js';
 
 await ensureAdmin();
 resetDailySpendIfNeeded();
@@ -30,13 +31,14 @@ app.get('/api/health',(req,res)=>res.json({ok:true,service:'adpulse',version:'0.
 
 app.post('/api/auth/register',wrap(async(req,res)=>res.status(201).json(await register(req.body))));
 app.post('/api/auth/login',wrap(async(req,res)=>res.json(await login(req.body.email,req.body.password))));
-app.get('/api/me',auth(),(req,res)=>res.json({user:req.user,balance:balanceFor(req.user.id)}));
+app.get('/api/me',auth(),(req,res)=>res.json({user:req.user,balance:balanceFor(req.user.id),balances:balancesFor(req.user.id)}));
 
 app.get('/api/dashboard',auth(),(req,res)=>{
   const u=req.user;
   if(u.role==='publisher'){
     return res.json({
       balance:balanceFor(u.id),
+      balances:balancesFor(u.id),
       sites:all('SELECT * FROM sites WHERE publisher_id=? ORDER BY created_at DESC',[u.id]),
       zones:all('SELECT * FROM zones WHERE publisher_id=? ORDER BY created_at DESC',[u.id]),
       metrics:one(`SELECT COUNT(*) events,
@@ -49,6 +51,7 @@ app.get('/api/dashboard',auth(),(req,res)=>{
   if(u.role==='advertiser'){
     return res.json({
       balance:balanceFor(u.id),
+      balances:balancesFor(u.id),
       campaigns:all('SELECT * FROM campaigns WHERE advertiser_id=? ORDER BY created_at DESC',[u.id]),
       metrics:one(`SELECT COUNT(*) events,
         SUM(CASE WHEN event_type='view' AND valid=1 THEN 1 ELSE 0 END) views,
@@ -118,20 +121,122 @@ app.get('/api/publisher/zones',auth('publisher'),(req,res)=>res.json(all('SELECT
 app.post('/api/advertiser/campaigns',auth('advertiser'),(req,res)=>{
   const schema=z.object({
     name:z.string().min(2),destinationUrl:z.string().url(),headline:z.string().min(2).max(120),description:z.string().max(240).optional().default(''),imageUrl:z.string().url().optional().or(z.literal('')),
-    model:z.enum(['CPM','CPC','HYBRID']),cpm:z.number().min(0).default(0),cpc:z.number().min(0).default(0),budgetTotal:z.number().positive(),budgetDaily:z.number().positive(),
+    model:z.enum(['CPM','CPC','HYBRID']),currency:z.enum(['KES','CDF','UGX','XOF','XAF','RWF','ZMW','SLE','USD']).default('USD'),cpm:z.number().min(0).default(0),cpc:z.number().min(0).default(0),budgetTotal:z.number().positive(),budgetDaily:z.number().positive(),
     countries:z.array(z.string()).default([]),categories:z.array(z.string()).default([]),devices:z.array(z.string()).default([])
   });
   const d=schema.parse(req.body);
   if(d.model!=='CPC' && d.cpm<=0) return res.status(400).json({error:'CPM must be greater than zero'});
   if(d.model!=='CPM' && d.cpc<=0) return res.status(400).json({error:'CPC must be greater than zero'});
   const cid=id('cmp');
-  run(`INSERT INTO campaigns(id,advertiser_id,name,destination_url,headline,description,image_url,model,cpm,cpc,budget_total,budget_daily,target_countries,target_categories,target_devices,status)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending_review')`,
-    [cid,req.user.id,d.name,d.destinationUrl,d.headline,d.description,d.imageUrl||null,d.model,d.cpm,d.cpc,d.budgetTotal,d.budgetDaily,JSON.stringify(d.countries),JSON.stringify(d.categories),JSON.stringify(d.devices)]);
+  run(`INSERT INTO campaigns(id,advertiser_id,name,destination_url,headline,description,image_url,model,cpm,cpc,budget_total,budget_daily,currency,target_countries,target_categories,target_devices,status)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending_review')`,
+    [cid,req.user.id,d.name,d.destinationUrl,d.headline,d.description,d.imageUrl||null,d.model,d.cpm,d.cpc,d.budgetTotal,d.budgetDaily,d.currency,JSON.stringify(d.countries),JSON.stringify(d.categories),JSON.stringify(d.devices)]);
   res.status(201).json(one('SELECT * FROM campaigns WHERE id=?',[cid]));
 });
 
 app.get('/api/advertiser/campaigns',auth('advertiser'),(req,res)=>res.json(all('SELECT * FROM campaigns WHERE advertiser_id=? ORDER BY created_at DESC',[req.user.id])));
+
+app.get('/api/payments/gateways',auth(),wrap(async(req,res)=>res.json(await xdigitexPay.gateways())));
+
+app.post('/api/profile/kyc',auth(),(req,res)=>{
+  const schema=z.object({phone:z.string().min(8).max(30),country:z.string().min(2).max(2)});
+  const d=schema.parse(req.body);
+  run("UPDATE users SET phone=?,country=?,kyc_status=CASE WHEN kyc_status='verified' THEN 'verified' ELSE 'pending' END WHERE id=?",[d.phone,d.country.toUpperCase(),req.user.id]);
+  res.json({ok:true,kyc_status:req.user.kyc_status==='verified'?'verified':'pending'});
+});
+
+app.post('/api/payments/initiate',auth('advertiser'),wrap(async(req,res)=>{
+  const schema=z.object({
+    amount:z.number().positive(),
+    currency:z.string(),
+    gateway:z.string(),
+    phone:z.string().optional(),
+    firstName:z.string().max(80).optional(),
+    lastName:z.string().max(80).optional(),
+    description:z.string().max(180).optional()
+  });
+  const d=schema.parse(req.body), currency=assertCurrency(d.currency), gateway=assertGateway(d.gateway);
+  if(gateway==='mobile' && !d.phone) return res.status(400).json({error:'Phone is required for pan-Africa mobile money'});
+  const payload={
+    amount:d.amount,currency,gateway,email:req.user.email,
+    phone:d.phone||req.user.phone||undefined,
+    first_name:d.firstName||req.user.name?.split(' ')[0]||'ADPulse',
+    last_name:d.lastName||req.user.name?.split(' ').slice(1).join(' ')||'User',
+    description:d.description||'ADPulse advertiser wallet deposit',
+    callback_url:config.appUrl+'/payment-return',
+    webhook_url:config.appUrl+'/webhooks/xdigitex-pay'
+  };
+  const result=await xdigitexPay.initiatePayment(payload);
+  run(`INSERT OR IGNORE INTO payment_transactions(id,user_id,reference,kind,gateway,amount,fee,net_amount,currency,status,provider_payload)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+    [id('pay'),req.user.id,result.reference,'deposit',gateway,Number(result.amount??d.amount),Number(result.fee||0),Number(result.net_amount??0),currency,'pending',JSON.stringify(result)]);
+  res.status(201).json(result);
+}));
+
+async function finalizeDeposit(reference){
+  const tx=one("SELECT * FROM payment_transactions WHERE reference=? AND kind='deposit'",[reference]);
+  if(!tx) throw Object.assign(new Error('Unknown payment reference'),{status:404});
+  const status=await xdigitexPay.paymentStatus(reference);
+  if(status.status!=='completed'){
+    run('UPDATE payment_transactions SET status=?,provider_payload=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',[status.status||'pending',JSON.stringify(status),tx.id]);
+    return {credited:false,status};
+  }
+  const credit=Number(status.net_amount??status.amount??tx.net_amount??tx.amount);
+  const currency=assertCurrency(status.currency||tx.currency);
+  const apply=db.transaction(()=>{
+    const fresh=one('SELECT * FROM payment_transactions WHERE id=?',[tx.id]);
+    if(fresh.status==='completed') return false;
+    run("UPDATE payment_transactions SET status='completed',amount=?,fee=?,net_amount=?,currency=?,provider_payload=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+      [Number(status.amount??tx.amount),Number(status.fee||0),credit,currency,JSON.stringify(status),tx.id]);
+    addLedger({userId:tx.user_id,eventId:tx.id,type:'PAYMENT_DEPOSIT',amount:credit,currency,note:'Xdigitex Pay '+reference});
+    return true;
+  });
+  return {credited:apply(),status};
+}
+
+app.get('/api/payments/:reference/status',auth(),wrap(async(req,res)=>{
+  const tx=one('SELECT * FROM payment_transactions WHERE reference=?',[req.params.reference]);
+  if(!tx || tx.user_id!==req.user.id) return res.status(404).json({error:'Payment not found'});
+  res.json(await finalizeDeposit(req.params.reference));
+}));
+
+app.get('/api/payments',auth(),(req,res)=>res.json(all('SELECT * FROM payment_transactions WHERE user_id=? ORDER BY created_at DESC LIMIT 100',[req.user.id])));
+
+app.post('/webhooks/xdigitex-pay',wrap(async(req,res)=>{
+  const reference=String(req.body?.reference||'');
+  if(!reference) return res.status(400).json({error:'Missing reference'});
+  const tx=one("SELECT * FROM payment_transactions WHERE reference=? AND kind='deposit'",[reference]);
+  if(!tx) return res.status(202).json({ok:true,ignored:true});
+  await finalizeDeposit(reference);
+  res.json({ok:true});
+}));
+
+app.post('/api/publisher/withdrawals',auth('publisher'),wrap(async(req,res)=>{
+  if(config.kycRequired && req.user.kyc_status!=='verified') return res.status(403).json({error:'KYC verification is required before withdrawal'});
+  const schema=z.object({amount:z.number().positive(),currency:z.string(),accountNumber:z.string().min(8).max(30)});
+  const d=schema.parse(req.body),currency=assertCurrency(d.currency);
+  if(currency==='USD') return res.status(400).json({error:'Mobile-money withdrawal does not support USD on this route'});
+  const reserve=Math.round(d.amount*1.03*1000000)/1000000;
+  if(balanceFor(req.user.id,currency)<reserve) return res.status(400).json({error:'Insufficient balance including withdrawal fee'});
+  const localId=id('wdr');
+  addLedger({userId:req.user.id,eventId:localId,type:'WITHDRAWAL_HOLD',amount:-reserve,currency,note:'Withdrawal hold'});
+  let result;
+  try{
+    result=await xdigitexPay.createWithdrawal({amount:d.amount,currency,method:'mobile_money',account_number:d.accountNumber});
+  }catch(err){
+    addLedger({userId:req.user.id,eventId:localId,type:'WITHDRAWAL_REVERSAL',amount:reserve,currency,note:'Withdrawal provider failure'});
+    throw err;
+  }
+  const actualFee=Number(result.fee||d.amount*.03), actualTotal=d.amount+actualFee, adjustment=reserve-actualTotal;
+  const tx=db.transaction(()=>{
+    if(Math.abs(adjustment)>0.000001) addLedger({userId:req.user.id,eventId:localId,type:'WITHDRAWAL_FEE_ADJUSTMENT',amount:adjustment,currency,note:'Adjusted to provider fee'});
+    run(`INSERT INTO payment_transactions(id,user_id,reference,kind,gateway,amount,fee,net_amount,currency,status,provider_payload)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+      [localId,req.user.id,result.reference,'withdrawal','mobile_money',d.amount,actualFee,d.amount,currency,result.status||'processing',JSON.stringify(result)]);
+  });
+  tx();
+  res.status(201).json({...result,balance:balanceFor(req.user.id,currency)});
+}));
 
 app.post('/api/advertiser/demo-fund',auth('advertiser'),(req,res)=>{
   if(!config.demoMode) return res.status(404).json({error:'Not available'});
@@ -140,7 +245,7 @@ app.post('/api/advertiser/demo-fund',auth('advertiser'),(req,res)=>{
   res.json({balance:balanceFor(req.user.id)});
 });
 
-app.get('/api/ledger',auth(),(req,res)=>res.json({balance:balanceFor(req.user.id),entries:all('SELECT * FROM ledger_entries WHERE user_id=? ORDER BY created_at DESC LIMIT 200',[req.user.id])}));
+app.get('/api/ledger',auth(),(req,res)=>res.json({balance:balanceFor(req.user.id),balances:balancesFor(req.user.id),entries:all('SELECT * FROM ledger_entries WHERE user_id=? ORDER BY created_at DESC LIMIT 200',[req.user.id])}));
 
 app.get('/serve', (req,res)=>{
   const result=makeAdRequest({zoneKey:String(req.query.zone||''),ip:req.ip,userAgent:req.get('user-agent')||'',country:req.get('cf-ipcountry')||''});
@@ -162,6 +267,15 @@ app.get('/r/click',wrap(async(req,res)=>{
   if(!campaign) return res.status(404).send('Campaign unavailable');
   res.redirect(302,campaign.destination_url);
 }));
+
+app.get('/api/admin/kyc',auth('admin'),(req,res)=>res.json(all("SELECT id,email,name,role,phone,country,kyc_status,created_at FROM users WHERE role!='admin' ORDER BY created_at DESC")));
+app.post('/api/admin/kyc/:id/status',auth('admin'),(req,res)=>{
+  const status=z.enum(['not_started','pending','verified','rejected']).parse(req.body.status);
+  const user=one("SELECT id FROM users WHERE id=? AND role!='admin'",[req.params.id]);
+  if(!user) return res.status(404).json({error:'User not found'});
+  run('UPDATE users SET kyc_status=? WHERE id=?',[status,user.id]);
+  res.json({ok:true,status});
+});
 
 app.get('/api/admin/sites',auth('admin'),(req,res)=>res.json(all('SELECT s.*,u.email publisher_email FROM sites s JOIN users u ON u.id=s.publisher_id ORDER BY s.created_at DESC')));
 app.post('/api/admin/sites/:id/status',auth('admin'),(req,res)=>{
