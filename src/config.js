@@ -29,7 +29,8 @@ export const config = {
   aiContextModel: process.env.AI_CONTEXT_MODEL || '',
   supportEmail: process.env.SUPPORT_EMAIL || 'sales@adpulse.example',
   supportWhatsapp: process.env.SUPPORT_WHATSAPP || '',
-  supportChatEnabled: String(process.env.SUPPORT_CHAT_ENABLED || 'true').toLowerCase()==='true'
+  supportChatEnabled: String(process.env.SUPPORT_CHAT_ENABLED || 'true').toLowerCase()==='true',
+  productionStoresRequired: String(process.env.PRODUCTION_STORES_REQUIRED || 'false').toLowerCase()==='true'
 };
 
 if (config.env === 'production' && (config.jwtSecret.includes('change-me') || config.jwtSecret.length < 32)) {
