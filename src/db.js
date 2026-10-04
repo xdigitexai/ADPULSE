@@ -255,6 +255,8 @@ if(!hasColumn('campaigns','conversion_window_days')) db.exec("ALTER TABLE campai
 if(!hasColumn('campaigns','public_key')) db.exec("ALTER TABLE campaigns ADD COLUMN public_key TEXT");
 if(!hasColumn('campaigns','video_url')) db.exec("ALTER TABLE campaigns ADD COLUMN video_url TEXT");
 if(!hasColumn('campaigns','creative_type')) db.exec("ALTER TABLE campaigns ADD COLUMN creative_type TEXT NOT NULL DEFAULT 'display'");
+if(!hasColumn('campaigns','is_house')) db.exec("ALTER TABLE campaigns ADD COLUMN is_house INTEGER NOT NULL DEFAULT 0");
+if(!hasColumn('campaigns','house_site_ids')) db.exec("ALTER TABLE campaigns ADD COLUMN house_site_ids TEXT NOT NULL DEFAULT '[]'");
 if(!hasColumn('users','google_sub')) db.exec("ALTER TABLE users ADD COLUMN google_sub TEXT");
 if(!hasColumn('zones','refresh_enabled')) db.exec("ALTER TABLE zones ADD COLUMN refresh_enabled INTEGER NOT NULL DEFAULT 0");
 if(!hasColumn('zones','refresh_interval_seconds')) db.exec("ALTER TABLE zones ADD COLUMN refresh_interval_seconds INTEGER NOT NULL DEFAULT 45");

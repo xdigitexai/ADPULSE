@@ -184,4 +184,17 @@ test('production deployment smoke: boot, uploads, accounts, accounting and provi
     const failed=spawnSync(process.execPath,['src/server.js'],{env:{...process.env,PRODUCTION_STORES_REQUIRED:'true'},encoding:'utf8',timeout:10000});
     assert.notEqual(failed.status,0);assert.match(failed.stderr,/one or more production stores are unavailable/);
   });
+  await t.test('owner house ads are restricted to selected sites and never move money',async()=>{
+    const house=await api('/api/advertiser/campaigns',{token:admin,body:{name:'House promotion',destinationUrl:'https://example.com/house',headline:'Our sites',creativeType:'display',model:'CPM',cpm:2,budgetTotal:1,budgetDaily:1},status:201});
+    run("UPDATE campaigns SET status='paused'");
+    run("UPDATE campaigns SET status='active',is_house=1,cpm=0,house_site_ids=? WHERE id=?",[JSON.stringify([site.id]),house.id]);
+    const before=one('SELECT COUNT(*) n FROM ledger_entries').n;
+    const headers={'x-forwarded-for':'198.51.100.230'};
+    const served=await api('/serve?zone='+zones['300x250'].publicKey,{headers});assert.equal(served.noFill,false);
+    for(const type of ['view','click']){const e=await api('/events',{headers,body:{token:served.token,type,metadata:{visibleMs:2000,visibilityPercent:100}}});assert.equal(e.billAmount,0);assert.equal(e.publisherAmount,0);}
+    assert.equal(one('SELECT COUNT(*) n FROM ledger_entries').n,before);
+    assert.equal((await api('/serve?zone='+zones.native.publicKey,{headers})).noFill,true);
+    run('UPDATE campaigns SET house_site_ids=? WHERE id=?',['[]',house.id]);
+    assert.equal((await api('/serve?zone='+zones['300x250'].publicKey,{headers})).noFill,true);
+  });
 });

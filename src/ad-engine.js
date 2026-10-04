@@ -17,6 +17,11 @@ export async function chooseCampaign({zone,country='',device='desktop',ipHash=''
   const audience=audienceFor({browserId,sessionId,personalizationAllowed});
   const eligible=[];
   for(const c of rows){
+    if(c.is_house){
+      if(!json(c.house_site_ids).includes(site.id)) continue;
+      const type=['native','video'].includes(zone.format)?zone.format:'display';
+      if(c.creative_type!==type) continue;
+    }
     if(c.budget_daily>0 && c.spent_today>=c.budget_daily) continue;
     const now=new Date();
     if(c.starts_at && new Date(c.starts_at)>now) continue;
@@ -36,13 +41,14 @@ export async function chooseCampaign({zone,country='',device='desktop',ipHash=''
     if(devices.length && !devices.includes(device)) continue;
     const interest=interestMatchScore(interests,excludes,audience);
     if(interest.blocked) continue;
-    if(c.model!=='CPC' && c.cpm < Number(zone.floor_cpm||0)) continue;
+    if(!c.is_house && c.model!=='CPC' && c.cpm < Number(zone.floor_cpm||0)) continue;
     const bal=balanceFor(c.advertiser_id,c.currency||'USD');
-    if(bal<=0) continue;
+    if(!c.is_house && bal<=0) continue;
     eligible.push({...c,_interestScore:interest.score});
   }
   if(!eligible.length) return null;
-  const scored=eligible.map(c=>{
+  const paid=eligible.filter(c=>!c.is_house);
+  const scored=(paid.length?paid:eligible).map(c=>{
     const categoryBoost=json(c.target_categories).includes(effectiveCategory)?1.25:1;
     const bid=(c.model==='CPC'?c.cpc*10:c.cpm) || .01;
     const rotationFactor=(previousCampaignId && c.id===previousCampaignId) ? 0.35 : 1;
@@ -92,6 +98,7 @@ export async function recordEvent({token,eventType,ip,userAgent,metadata={}}){
   if(eventType==='view' && ['CPM','HYBRID'].includes(campaign.model)) bill=Number(campaign.cpm)/1000;
   if(eventType==='click' && ['CPC','HYBRID'].includes(campaign.model)) bill=Number(campaign.cpc);
   bill=Math.max(0,bill);
+  if(campaign.is_house) bill=0;
   const currency=campaign.currency||'USD';
   const advertiserBalance=balanceFor(campaign.advertiser_id,currency);
   const valid=fraud.valid && (bill===0 || advertiserBalance>=bill) && (campaign.spent_total+bill<=campaign.budget_total);

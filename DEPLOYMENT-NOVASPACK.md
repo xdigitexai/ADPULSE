@@ -41,3 +41,9 @@ Database ports are internal only. Redis requires authentication. App ports bind 
 ## Acceptance limits
 
 The real payment key was accepted by the provider's read-only gateway endpoint. This does not prove a completed real deposit or payout. Payment success/failure, duplicate callbacks and withdrawal reversal are tested against a mock provider. Google account login/linking requires interactive verification; DNS ownership requires a publisher TXT record. IPinfo enrichment needs an IPINFO_TOKEN. External AI classification needs AI_CONTEXT_API_URL, AI_CONTEXT_API_KEY and AI_CONTEXT_MODEL; deterministic classification and support fallback operate without them. WordPress helper files are included; installation in a real WordPress site is a separate integration check.
+
+## First-party promotional placements
+
+Owner-authorized house promotions can fill the selected tdctech.org and deploy.makamesco-tech.co.ke zones when no paid campaign is eligible. The `is_house` and `house_site_ids` fields are managed server-side; the ordinary advertiser creation API cannot enable house status. House campaigns are explicitly restricted to approved site IDs and the matching creative format. They bypass wallet funding only for these own-site promotions. Every house view/click has zero advertiser charge and zero publisher earning, so these are not demo deposits or payouts. Paid campaigns retain priority and their existing accounting.
+
+Live placements use display and native slots, original SVG promo creatives, tracked campaign links, and 45-second viewability/activity-aware display refresh (maximum 3). Campaigns are named `HOUSE: ...` in the admin campaign list. Ownership meta tags and root files remain installed. Publisher templates were backed up before edits. Their ad sections use the anchor `#network-promotions`.
