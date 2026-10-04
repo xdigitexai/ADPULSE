@@ -7,7 +7,7 @@ class FloatingAds{
     Object.assign(this,options);this.started=Date.now();this.engaged=false;this.scrolled=false;this.busy=false;this.current=null;
     try{this.state=JSON.parse(sessionStorage.getItem('adpulse-popup-state')||'null')}catch{}
     this.state=this.state||{shown:0,campaigns:{},cooldownUntil:0,pages:0};this.state.pages++;this.save();
-    this.interact=()=>{this.engaged=true};this.scroll=()=>{const range=document.documentElement.scrollHeight-innerHeight;this.scrolled=range>0&&scrollY/range*100>=(this.settings?.scrollThreshold||40)};
+    this.interact=()=>{this.engaged=true};this.scroll=()=>{const range=document.documentElement.scrollHeight-innerHeight;this.scrolled=this.scrolled||(range>0&&(scrollY/range*100>=(this.settings?.scrollThreshold||20)||(this.settings?.scrollTriggerPixels>0&&scrollY>=this.settings.scrollTriggerPixels)))};
     addEventListener('pointerdown',this.interact,{passive:true});addEventListener('keydown',this.interact);addEventListener('scroll',this.scroll,{passive:true});
     this.key=e=>{if(e.key==='Escape'&&this.current){e.preventDefault();this.close('dismiss')}};addEventListener('keydown',this.key);
     document.addEventListener('visibilitychange',()=>{if(document.hidden&&this.current){this.visibleSince=0;this.host.style.visibility='hidden'}else if(this.host)this.host.style.visibility='visible'});
@@ -43,7 +43,7 @@ class FloatingAds{
   async tick(){
     if(this.busy)return;this.busy=true;
     try{
-      if(!this.settings||Date.now()-(this.configAt||0)>5000){const c=await this.config();this.settings=c.settings;this.enabled=c.enabled;this.configAt=Date.now()}
+      if(!this.settings||Date.now()-(this.configAt||0)>5000){const c=await this.config();this.settings=c.settings;this.enabled=c.enabled;this.configAt=Date.now();this.scroll()}
       const s=this.settings;if(!s)return;
       if(!this.enabled||s.pauseAds||!s.allowFloating||!s.randomPopupEnabled){if(this.current)this.close('pause');return}
       const mobile=innerWidth<=600;if((mobile&&!s.showMobile)||(!mobile&&!s.showDesktop)){if(this.current)this.close('pause');return}
