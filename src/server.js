@@ -552,6 +552,11 @@ app.post('/api/admin/finance/reconcile',auth('admin'),wrap(async(req,res)=>{
   res.json({ok:true,depositsChecked,withdrawalsChecked,reversed});
 }));
 
+app.get('/api/admin/fraud/events',auth('admin'),(req,res)=>{
+  const rows=all("SELECT id,request_id,event_type,publisher_id,site_id,zone_id,risk_score,valid,metadata,created_at FROM ad_events WHERE risk_score>0 OR valid=0 ORDER BY created_at DESC LIMIT 250");
+  res.json(rows.map(r=>{let metadata={};try{metadata=JSON.parse(r.metadata||'{}')}catch{}return {...r,metadata}}));
+});
+
 app.get('/api/admin/fraud',auth('admin'),(req,res)=>res.json(all(`SELECT publisher_id,COUNT(*) events,
   SUM(CASE WHEN valid=0 THEN 1 ELSE 0 END) invalid_events,
   ROUND(100.0*SUM(CASE WHEN valid=0 THEN 1 ELSE 0 END)/COUNT(*),2) invalid_rate,
