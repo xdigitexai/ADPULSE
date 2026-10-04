@@ -3,11 +3,14 @@ import cors from 'cors';
 import helmet from 'helmet';
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
+import fs from 'node:fs';
+import path from 'node:path';
+import multer from 'multer';
 import { z } from 'zod';
 import { RateLimiterMemory } from 'rate-limiter-flexible';
 import { config } from './config.js';
 import { db, id, one, all, run, balanceFor, balancesFor, addLedger, ensureAdmin, finalizeMaturePublisherEarnings } from './db.js';
-import { register, login, auth } from './auth.js';
+import { register, login, loginWithGoogle, auth } from './auth.js';
 import { makeAdRequest, recordEvent, resetDailySpendIfNeeded, verifyEvent } from './ad-engine.js';
 import { xdigitexPay, assertCurrency, assertGateway } from './xdigitex-pay.js';
 import { initProductionStores, productionStatus, writeConversion, mirrorSiteContext } from './production-store.js';
@@ -44,6 +47,8 @@ app.get('/payment-return',(req,res)=>res.redirect('/?payment=return'));
 
 app.post('/api/auth/register',wrap(async(req,res)=>{const result=await register(req.body);run("INSERT INTO account_ip_history(id,user_id,ip_hash) VALUES(?,?,?) ON CONFLICT(user_id,ip_hash) DO UPDATE SET last_seen=CURRENT_TIMESTAMP",[id('aip'),result.user.id,hashIp(req.ip)]);res.status(201).json(result)}));
 app.post('/api/auth/login',wrap(async(req,res)=>{const result=await login(req.body.email,req.body.password);run("INSERT INTO account_ip_history(id,user_id,ip_hash) VALUES(?,?,?) ON CONFLICT(user_id,ip_hash) DO UPDATE SET last_seen=CURRENT_TIMESTAMP",[id('aip'),result.user.id,hashIp(req.ip)]);res.json(result)}));
+app.get('/api/auth/google/config',(req,res)=>res.json({clientId:config.googleClientId||null}));
+app.post('/api/auth/google',wrap(async(req,res)=>{const role=['advertiser','publisher'].includes(req.body?.role)?req.body.role:'advertiser';const result=await loginWithGoogle(req.body?.credential,role);run("INSERT INTO account_ip_history(id,user_id,ip_hash) VALUES(?,?,?) ON CONFLICT(user_id,ip_hash) DO UPDATE SET last_seen=CURRENT_TIMESTAMP",[id('aip'),result.user.id,hashIp(req.ip)]);res.json(result)}));
 app.get('/api/me',auth(),(req,res)=>res.json({user:req.user,balance:balanceFor(req.user.id),balances:balancesFor(req.user.id)}));
 
 app.get('/api/dashboard',auth(),(req,res)=>{
@@ -168,6 +173,12 @@ app.post('/api/publisher/zones',auth('publisher'),(req,res)=>{
 });
 
 app.get('/api/publisher/zones',auth('publisher'),(req,res)=>res.json(all('SELECT z.*,s.domain FROM zones z JOIN sites s ON s.id=z.site_id WHERE z.publisher_id=? ORDER BY z.created_at DESC',[req.user.id])));
+app.post('/api/publisher/zones/:id/status',auth('publisher'),(req,res)=>{
+  const zone=one('SELECT * FROM zones WHERE id=?',[req.params.id]); requireOwner(zone,req.user.id,'publisher_id');
+  const status=z.enum(['active','paused']).parse(req.body.status);
+  run('UPDATE zones SET status=? WHERE id=?',[status,zone.id]);
+  res.json({ok:true,status});
+});
 
 app.post('/api/publisher/sites/:id/verify-ads-txt',auth('publisher'),wrap(async(req,res)=>{
   const site=one('SELECT * FROM sites WHERE id=?',[req.params.id]); requireOwner(site,req.user.id,'publisher_id');
@@ -248,6 +259,28 @@ app.post('/api/advertiser/campaigns',auth('advertiser'),(req,res)=>{
 });
 
 app.get('/api/advertiser/campaigns',auth('advertiser'),(req,res)=>res.json(all('SELECT * FROM campaigns WHERE advertiser_id=? ORDER BY created_at DESC',[req.user.id])));
+app.post('/api/advertiser/campaigns/:id/status',auth('advertiser'),(req,res)=>{
+  const campaign=one('SELECT * FROM campaigns WHERE id=?',[req.params.id]); requireOwner(campaign,req.user.id,'advertiser_id');
+  const status=z.enum(['active','paused']).parse(req.body.status);
+  if(status==='active' && !['paused','active'].includes(campaign.status)) return res.status(400).json({error:'Only an active/paused campaign can be resumed. Campaign review may still be required.'});
+  run('UPDATE campaigns SET status=? WHERE id=?',[status,campaign.id]);
+  res.json({ok:true,status});
+});
+app.post('/api/advertiser/campaigns/:id/budget',auth('advertiser'),(req,res)=>{
+  const campaign=one('SELECT * FROM campaigns WHERE id=?',[req.params.id]); requireOwner(campaign,req.user.id,'advertiser_id');
+  const d=z.object({increaseBy:z.number().positive(),dailyBudget:z.number().positive().optional()}).parse(req.body);
+  const newTotal=Number(campaign.budget_total)+Number(d.increaseBy);
+  run('UPDATE campaigns SET budget_total=?,budget_daily=? WHERE id=?',[newTotal,d.dailyBudget??campaign.budget_daily,campaign.id]);
+  res.json(one('SELECT * FROM campaigns WHERE id=?',[campaign.id]));
+});
+app.post('/api/advertiser/uploads',auth('advertiser'),upload.single('file'),(req,res)=>{
+  if(!req.file) return res.status(400).json({error:'Creative file is required'});
+  const isImage=req.file.mimetype.startsWith('image/');
+  const max=isImage?10*1024*1024:100*1024*1024;
+  if(req.file.size>max){try{fs.unlinkSync(req.file.path)}catch{};return res.status(400).json({error:isImage?'Image must be 10MB or smaller':'Video must be 100MB or smaller'});}
+  const relative='/uploads/'+path.basename(req.file.filename);
+  res.status(201).json({url:new URL(relative,config.appUrl).toString(),path:relative,mime:req.file.mimetype,size:req.file.size});
+});
 
 app.get('/api/payments/gateways',auth(),wrap(async(req,res)=>res.json(await xdigitexPay.gateways())));
 
