@@ -56,7 +56,7 @@ class FloatingAds{
       }
       if(s.autoClose===false&&this.state.openAd&&this.state.openAd.zone===this.zone&&Date.now()-this.state.openAd.savedAt<23*3600000){if(this.safe())this.show(this.state.openAd.ad,true);return}
       if(this.state.openAd){delete this.state.openAd;this.save()}
-      if(s.repeatCycle&&!this.state.cyclePolicy){this.state.cyclePolicy=true;if(!s.dismissCooldownSession)this.state.sessionDismissed=false;this.state.cooldownUntil=Math.min(this.state.cooldownUntil||0,Date.now()+60000);this.state.nextAt=Math.min(this.state.nextAt||0,Date.now()+60000);this.save()}
+      if(s.repeatCycle&&this.state.cycleInterval!==s.rotationIntervalSeconds){this.state.cyclePolicy=true;this.state.cycleInterval=s.rotationIntervalSeconds;if(!s.dismissCooldownSession)this.state.sessionDismissed=false;this.state.cooldownUntil=Math.min(this.state.cooldownUntil||0,Date.now()+s.rotationIntervalSeconds*1000);this.state.nextAt=Math.min(this.state.nextAt||0,Date.now()+s.rotationIntervalSeconds*1000);this.save()}
       if(this.state.awaitingNext&&!this.deadline){this.earliest=this.deadline=this.state.nextAt||Date.now()}
       if(this.state.sessionDismissed||Date.now()<this.state.cooldownUntil||Date.now()<(this.state.nextAt||0)||(s.maxAdsPerSession>0&&this.state.shown>=s.maxAdsPerSession))return;
       if(!this.deadline){const min=Math.max(s.initialDelaySeconds,s.minPopupDelaySeconds)*1000;this.earliest=Date.now()+min;this.deadline=Date.now()+min+Math.random()*Math.max(0,s.maxPopupDelaySeconds*1000-min)}

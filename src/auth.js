@@ -51,15 +51,18 @@ export function auth(requiredRole=null){
 }
 
 
-export async function loginWithGoogle(credential,role='advertiser'){
+export async function loginWithGoogle(credential,role=null){
   if(!config.googleClientId) throw Object.assign(new Error('Google sign-in is not configured'),{status:503});
   const ticket=await googleClient.verifyIdToken({idToken:String(credential||''),audience:config.googleClientId});
-  const payload=ticket.getPayload();
+  return completeGoogleLogin(ticket.getPayload(),role);
+}
+
+export async function completeGoogleLogin(payload,role=null){
   if(!payload?.sub || !payload?.email || !payload.email_verified) throw Object.assign(new Error('Google account email is not verified'),{status:401});
   const email=String(payload.email).toLowerCase();
   let user=one('SELECT * FROM users WHERE email=?',[email]);
   if(!user){
-    if(!['advertiser','publisher'].includes(role)) role='advertiser';
+    if(!['advertiser','publisher'].includes(role)) return {needsRole:true};
     const userId=id('usr');
     const hash=await bcrypt.hash('google:'+payload.sub+':'+cryptoRandom(),12);
     run('INSERT INTO users(id,email,password_hash,role,name,status,google_sub) VALUES(?,?,?,?,?,?,?)',[userId,email,hash,role,String(payload.name||email.split('@')[0]).slice(0,100),'active',payload.sub]);

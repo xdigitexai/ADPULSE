@@ -60,6 +60,20 @@ test('production deployment smoke: boot, uploads, accounts, accounting and provi
     await api('/api/admin/sites',{token:adv.token,status:403});
     await api('/api/advertiser/demo-fund',{token:adv.token,body:{amount:10},status:404});
   });
+  await t.test('new Google identities require an explicit role; returning roles are preserved',async()=>{
+    const {completeGoogleLogin}=await import('../src/auth.js');
+    const payload={sub:'google-fixture',email:'google-role@example.test',email_verified:true,name:'Google fixture'};
+    assert.deepEqual(await completeGoogleLogin(payload),{needsRole:true});
+    assert.equal(one('SELECT id FROM users WHERE email=?',[payload.email]),undefined);
+    const first=await completeGoogleLogin(payload,'publisher');assert.equal(first.user.role,'publisher');
+    const returning=await completeGoogleLogin(payload,'advertiser');assert.equal(returning.user.id,first.user.id);assert.equal(returning.user.role,'publisher');
+    await assert.rejects(()=>completeGoogleLogin({...payload,sub:'wrong-sub'}));
+    assert.equal((await api('/api/admin/site-policy',{token:admin})).autoApprove,true);
+    await api('/api/admin/site-policy',{token:pub.token,body:{autoApprove:false},status:403});
+    await api('/api/admin/site-policy',{token:admin,body:{autoApprove:false}});
+    assert.equal((await api('/api/admin/site-policy',{token:admin})).autoApprove,false);
+    await api('/api/admin/site-policy',{token:admin,body:{autoApprove:true}});
+  });
   await t.test('all supported creative uploads and unsafe file rejection',async()=>{
     for(const [mime,ext] of [['image/jpeg','jpg'],['image/png','png'],['image/webp','webp'],['image/gif','gif'],['video/mp4','mp4'],['video/webm','webm']]){
       const form=new FormData();form.set('file',new Blob(['smoke fixture'],{type:mime}),'creative.'+ext);
@@ -170,8 +184,8 @@ test('production deployment smoke: boot, uploads, accounts, accounting and provi
     payments.get(payment.reference).status='failed';result=await api('/api/payments/'+payment.reference+'/status',{token:adv.token});assert.equal(result.credited,false);
     payments.get(payment.reference).status='completed';result=await api('/api/payments/'+payment.reference+'/status',{token:adv.token});assert.equal(result.credited,true);
     await api('/webhooks/xdigitex-pay',{body:{reference:payment.reference}});assert.equal(balanceFor(adv.user.id,'KES'),20);
-    await api('/api/publisher/withdrawals',{token:pub.token,body:{amount:500,currency:'KES',accountNumber:'254700000000'},status:403});
-    await api('/api/admin/kyc/'+pub.user.id+'/status',{token:admin,body:{status:'verified'}});
+    await api('/api/publisher/withdrawals',{token:pub.token,body:{amount:500,currency:'KES',accountNumber:'254700000000'},status:400});
+    assert.equal(one('SELECT kyc_status FROM users WHERE id=?',[pub.user.id]).kyc_status,'not_started');
     await api('/api/publisher/withdrawals',{token:pub.token,body:{amount:499,currency:'KES',accountNumber:'254700000000'},status:400});
     addLedger({userId:pub.user.id,type:'TEST_FIXTURE',amount:2000,currency:'KES'});
     await api('/api/publisher/withdrawals',{token:pub.token,body:{amount:500,currency:'KES',accountNumber:'254700000000'},status:201});
@@ -216,6 +230,11 @@ test('production deployment smoke: boot, uploads, accounts, accounting and provi
     assert.equal((await api('/zone-config?zone='+zones['300x250'].publicKey)).enabled,false);
     assert.equal((await api('/serve?zone='+zones['300x250'].publicKey,{headers})).noFill,true);
     await api('/api/publisher/zones/'+zones['300x250'].id+'/display-settings',{token:pub.token,body:{pauseAds:false}});
+    run('UPDATE campaigns SET house_site_ids=? WHERE id=?',['["*"]',house.id]);
+    assert.equal((await api('/serve?zone='+zones['300x250'].publicKey,{headers})).noFill,false);
+    const stats=(await api('/api/publisher/sites',{token:pub.token})).find(s=>s.id===site.id);assert.ok(stats.ad_requests>0);assert.equal(stats.ads_shown,one("SELECT COUNT(DISTINCT request_id) n FROM ad_events WHERE site_id=? AND event_type='render'",[site.id]).n);
+    await api('/api/publisher/zones/'+zones['300x250'].id+'/display-settings',{token:pub.token,body:{rotationIntervalSeconds:10,dismissCooldownMinutes:0}});
+    assert.equal((await api('/zone-config?zone='+zones['300x250'].publicKey)).settings.rotationIntervalSeconds,10);
     run('UPDATE campaigns SET house_site_ids=? WHERE id=?',['[]',house.id]);
     assert.equal((await api('/serve?zone='+zones['300x250'].publicKey,{headers})).noFill,true);
   });

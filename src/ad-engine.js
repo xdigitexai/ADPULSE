@@ -20,7 +20,7 @@ export async function chooseCampaign({zone,country='',device='desktop',ipHash=''
   for(const c of rows){
     if(excludedCampaignIds.includes(c.id))continue;
     if(c.is_house){
-      if(!json(c.house_site_ids).includes(site.id)) continue;
+      if(!json(c.house_site_ids).includes('*') && !json(c.house_site_ids).includes(site.id)) continue;
       const type=['native','video'].includes(zone.format)?zone.format:'display';
       if(zoneDisplaySettings(zone).displayMode!=='floating' && c.creative_type!==type) continue;
     }

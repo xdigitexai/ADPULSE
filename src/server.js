@@ -74,7 +74,7 @@ app.get('/payment-return',(req,res)=>res.redirect('/?payment=return'));
 app.post('/api/auth/register',wrap(async(req,res)=>{const result=await register(req.body);run("INSERT INTO account_ip_history(id,user_id,ip_hash) VALUES(?,?,?) ON CONFLICT(user_id,ip_hash) DO UPDATE SET last_seen=CURRENT_TIMESTAMP",[id('aip'),result.user.id,hashIp(req.ip)]);res.status(201).json(result)}));
 app.post('/api/auth/login',wrap(async(req,res)=>{const result=await login(req.body.email,req.body.password);run("INSERT INTO account_ip_history(id,user_id,ip_hash) VALUES(?,?,?) ON CONFLICT(user_id,ip_hash) DO UPDATE SET last_seen=CURRENT_TIMESTAMP",[id('aip'),result.user.id,hashIp(req.ip)]);res.json(result)}));
 app.get('/api/auth/google/config',(req,res)=>res.json({clientId:config.googleClientId||null}));
-app.post('/api/auth/google',wrap(async(req,res)=>{const role=['advertiser','publisher'].includes(req.body?.role)?req.body.role:'advertiser';const result=await loginWithGoogle(req.body?.credential,role);run("INSERT INTO account_ip_history(id,user_id,ip_hash) VALUES(?,?,?) ON CONFLICT(user_id,ip_hash) DO UPDATE SET last_seen=CURRENT_TIMESTAMP",[id('aip'),result.user.id,hashIp(req.ip)]);res.json(result)}));
+app.post('/api/auth/google',wrap(async(req,res)=>{const role=['advertiser','publisher'].includes(req.body?.role)?req.body.role:null;const result=await loginWithGoogle(req.body?.credential,role);if(result.needsRole)return res.json(result);run("INSERT INTO account_ip_history(id,user_id,ip_hash) VALUES(?,?,?) ON CONFLICT(user_id,ip_hash) DO UPDATE SET last_seen=CURRENT_TIMESTAMP",[id('aip'),result.user.id,hashIp(req.ip)]);res.json(result)}));
 app.get('/api/me',auth(),(req,res)=>res.json({user:req.user,balance:balanceFor(req.user.id),balances:balancesFor(req.user.id)}));
 
 app.get('/api/dashboard',auth(),(req,res)=>{
@@ -84,7 +84,7 @@ app.get('/api/dashboard',auth(),(req,res)=>{
     return res.json({
       balance:balanceFor(u.id),
       balances:balancesFor(u.id),
-      sites:all('SELECT * FROM sites WHERE publisher_id=? ORDER BY created_at DESC',[u.id]),
+      sites:all("SELECT s.*, (SELECT COUNT(DISTINCT request_id) FROM ad_events WHERE site_id=s.id AND event_type='render') ads_shown,(SELECT COUNT(DISTINCT request_id) FROM ad_events WHERE site_id=s.id AND event_type='view' AND valid=1) impressions FROM sites s WHERE publisher_id=? ORDER BY created_at DESC",[u.id]),
       zones:all('SELECT * FROM zones WHERE publisher_id=? ORDER BY created_at DESC',[u.id]),
       metrics:one(`SELECT COUNT(*) events,
         SUM(CASE WHEN event_type='view' AND valid=1 THEN 1 ELSE 0 END) views,
@@ -181,11 +181,13 @@ app.post('/api/publisher/sites/:id/verify',auth('publisher'),wrap(async(req,res)
     }else{
       return res.status(400).json({error:'Unsupported verification method'});
     }
-  if(verified) run("UPDATE sites SET status='pending_review',verification_method=? WHERE id=?",[method,site.id]);
-  res.json({verified,status:verified?'pending_review':'pending_verification',method:detail});
+  const autoApprove=one("SELECT value FROM system_settings WHERE key='auto_approve_domains'")?.value!=='false';
+  const status=verified?(['rejected','suspended'].includes(site.status)?site.status:site.status==='approved'||autoApprove?'approved':'pending_review'):site.status;
+  if(verified) run('UPDATE sites SET status=?,verification_method=? WHERE id=?',[status,method,site.id]);
+  res.json({verified,status,method:detail});
 }));
 
-app.get('/api/publisher/sites',auth('publisher'),(req,res)=>res.json(all('SELECT * FROM sites WHERE publisher_id=? ORDER BY created_at DESC',[req.user.id])));
+app.get('/api/publisher/sites',auth('publisher'),(req,res)=>res.json(all("SELECT s.*, (SELECT COUNT(DISTINCT request_id) FROM ad_events WHERE site_id=s.id AND event_type='render') ads_shown,(SELECT COUNT(DISTINCT request_id) FROM ad_events WHERE site_id=s.id AND event_type='view' AND valid=1) impressions,(SELECT COUNT(*) FROM ad_events WHERE site_id=s.id AND event_type='request') ad_requests FROM sites s WHERE publisher_id=? ORDER BY created_at DESC",[req.user.id])));
 
 app.post('/api/publisher/zones',auth('publisher'),(req,res)=>{
   const schema=z.object({siteId:z.string(),name:z.string().min(2),format:z.enum(['responsive','300x250','336x280','728x90','970x250','320x50','320x100','300x600','160x600','native','video']).default('responsive'),floorCpm:z.number().min(0).default(0),refreshEnabled:z.boolean().default(false),refreshIntervalSeconds:z.number().int().min(30).max(300).default(45),refreshMax:z.number().int().min(0).max(10).default(3)});
@@ -399,7 +401,7 @@ app.post('/webhooks/xdigitex-pay',wrap(async(req,res)=>{
 
 app.post('/api/publisher/withdrawals',auth('publisher'),wrap(async(req,res)=>{
   finalizeMaturePublisherEarnings();
-  if(config.kycRequired && req.user.kyc_status!=='verified') return res.status(403).json({error:'KYC verification is required before withdrawal'});
+  // Withdrawals retain balance, maturity and provider checks; no platform KYC gate.
   const schema=z.object({amount:z.number().positive(),currency:z.string(),accountNumber:z.string().min(8).max(30)});
   const d=schema.parse(req.body),currency=assertCurrency(d.currency);
   const minimum=Number(config.minimumPayouts?.[currency]||0);
@@ -568,6 +570,9 @@ app.get('/r/click',wrap(async(req,res)=>{
   res.redirect(302,target.toString());
 }));
 
+app.get('/api/admin/site-policy',auth('admin'),(req,res)=>res.json({autoApprove:one("SELECT value FROM system_settings WHERE key='auto_approve_domains'")?.value!=='false'}));
+app.post('/api/admin/site-policy',auth('admin'),(req,res)=>{const d=z.object({autoApprove:z.boolean()}).parse(req.body);run("INSERT INTO system_settings(key,value,updated_at) VALUES('auto_approve_domains',?,CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP",[String(d.autoApprove)]);res.json(d)});
+
 app.get('/api/admin/support/settings',auth('admin'),(req,res)=>{
   res.json({
     email:one("SELECT value FROM system_settings WHERE key='support_email'")?.value||config.supportEmail,
@@ -608,7 +613,7 @@ app.post('/api/admin/kyc/:id/status',auth('admin'),(req,res)=>{
   res.json({ok:true,status});
 });
 
-app.get('/api/admin/sites',auth('admin'),(req,res)=>res.json(all('SELECT s.*,u.email publisher_email FROM sites s JOIN users u ON u.id=s.publisher_id ORDER BY s.created_at DESC')));
+app.get('/api/admin/sites',auth('admin'),(req,res)=>res.json(all("SELECT s.*,u.email publisher_email,(SELECT COUNT(DISTINCT request_id) FROM ad_events WHERE site_id=s.id AND event_type='render') ads_shown FROM sites s JOIN users u ON u.id=s.publisher_id ORDER BY s.created_at DESC")));
 app.post('/api/admin/sites/:id/status',auth('admin'),(req,res)=>{
   const status=z.enum(['approved','rejected','suspended','pending_review']).parse(req.body.status);
   const site=one('SELECT * FROM sites WHERE id=?',[req.params.id]); if(!site) return res.status(404).json({error:'Not found'});
