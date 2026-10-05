@@ -1,13 +1,14 @@
 import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import { config } from './config.js';
-import { all, one, run, id, addLedger, db, balanceFor } from './db.js';
+import { all, one, run, id, addLedger, db, balanceFor,earningInCurrency } from './db.js';
 import { hashIp, deviceFromUA, scoreEvent } from './fraud.js';
 import { getFrequency, cacheFrequency, writeAdEvent } from './production-store.js';
 import { enrichIp } from './ip-intelligence.js';
 import { audienceFor, interestMatchScore, updateAudienceSignal } from './audience-engine.js';
 import {unitCharge} from './campaign-delivery.js';
 import {zoneDisplaySettings} from './display-settings.js';
+import {convertCurrency} from './currency-rates.js';
 
 const json = (s) => { try{return JSON.parse(s||'[]')}catch{return []} };
 const today = () => new Date().toISOString().slice(0,10);
@@ -15,6 +16,7 @@ const today = () => new Date().toISOString().slice(0,10);
 export async function chooseCampaign({zone,country='',device='desktop',ipHash='',contextCategory='',browserId='',sessionId='',personalizationAllowed=false,previousCampaignId='',excludedCampaignIds=[]}) {
   resetDailySpendIfNeeded();
   const site=one('SELECT * FROM sites WHERE id=?',[zone.site_id]);
+  const publisherCurrency=one('SELECT currency FROM users WHERE id=?',[site.publisher_id])?.currency||'USD';
   const rows=all("SELECT c.* FROM campaigns c WHERE c.status='active' AND c.spent_total < c.budget_total");
   const effectiveCategory=contextCategory||site.category;
   const audience=audienceFor({browserId,sessionId,personalizationAllowed});
@@ -45,17 +47,22 @@ export async function chooseCampaign({zone,country='',device='desktop',ipHash=''
     if(devices.length && !devices.includes(device)) continue;
     const interest=interestMatchScore(interests,excludes,audience);
     if(interest.blocked) continue;
-    if(!c.is_house && c.model!=='CPC' && c.cpm < Number(zone.floor_cpm||0)) continue;
+    let normalizedBid;
+    try{
+      normalizedBid=c.is_house ? 0.01 : convertCurrency(db,(c.model==='CPC'?c.cpc*10:c.cpm)||.01,c.currency||'USD',publisherCurrency).amount;
+      if(!c.is_house&&c.model!=='CPC'&&convertCurrency(db,c.cpm,c.currency||'USD',publisherCurrency).amount<Number(zone.floor_cpm||0))continue;
+      if(!c.is_house)earningInCurrency(site.publisher_id,unitCharge(c)*config.publisherRevenueShare,c.currency||'USD');
+    }catch{continue;}
     const bal=balanceFor(c.advertiser_id,c.currency||'USD');
     if(!c.is_house && (bal<unitCharge(c)||unitCharge(c)<=0)) continue;
     if(!c.is_house && (c.spent_total+unitCharge(c)>c.budget_total||(c.budget_daily>0&&c.spent_today+unitCharge(c)>c.budget_daily)))continue;
-    eligible.push({...c,_interestScore:interest.score});
+    eligible.push({...c,_interestScore:interest.score,_normalizedBid:normalizedBid});
   }
   if(!eligible.length) return null;
   const paid=eligible.filter(c=>!c.is_house);
   const scored=(paid.length?paid:eligible).map(c=>{
     const categoryBoost=json(c.target_categories).includes(effectiveCategory)?1.25:1;
-    const bid=(c.model==='CPC'?c.cpc*10:c.cpm) || .01;
+    const bid=c._normalizedBid;
     const rotationFactor=(previousCampaignId && c.id===previousCampaignId) ? 0.35 : 1;
     return {c,score:bid*categoryBoost*Number(c._interestScore||1)*rotationFactor*(0.8+Math.random()*.4)};
   }).sort((a,b)=>b.score-a.score);
@@ -107,20 +114,25 @@ export async function recordEvent({token,eventType,ip,userAgent,metadata={}}){
   if(campaign.is_house) bill=0;
   const currency=campaign.currency||'USD';
   const advertiserBalance=balanceFor(campaign.advertiser_id,currency);
-  const valid=fraud.valid && (bill===0 || advertiserBalance>=bill) && (campaign.spent_total+bill<=campaign.budget_total);
-  const publisherAmount=valid?bill*config.publisherRevenueShare:0;
+  let settlement={amount:0,currency:one('SELECT currency FROM users WHERE id=?',[signed.publisherId])?.currency||currency},currencyReady=true;
+  try{if(bill>0)settlement=earningInCurrency(signed.publisherId,bill*config.publisherRevenueShare,currency);}catch{currencyReady=false;fraud.reasons.push('currency_rate_unavailable');}
+  let valid=fraud.valid && currencyReady && (bill===0 || advertiserBalance>=bill) && (campaign.spent_total+bill<=campaign.budget_total);
+  let publisherAmount=valid?settlement.amount:0;
   const eventId=id('evt');
 
   const tx=db.transaction(()=>{
+    const fresh=one('SELECT * FROM campaigns WHERE id=?',[campaign.id]);
+    valid=valid&&Boolean(fresh)&&(bill===0||balanceFor(campaign.advertiser_id,currency)>=bill)&&(fresh.spent_total+bill<=fresh.budget_total)&&(!fresh.budget_daily||fresh.spent_today+bill<=fresh.budget_daily);
+    publisherAmount=valid?settlement.amount:0;
     run("INSERT INTO ad_events(id,request_id,event_type,campaign_id,publisher_id,site_id,zone_id,ip_hash,user_agent,browser_id,session_id,risk_score,valid,bill_amount,publisher_amount,metadata) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-      [eventId,signed.requestId,eventType,signed.campaignId,signed.publisherId,signed.siteId,signed.zoneId,ipHash,userAgent,browserId||null,sessionId||null,fraud.score,valid?1:0,valid?bill:0,publisherAmount,JSON.stringify({...metadata,fraudReasons:fraud.reasons,network:{source:intel.source,asn:intel.asn,asnName:intel.asnName,asnType:intel.asnType,vpn:intel.vpn,proxy:intel.proxy,tor:intel.tor,hosting:intel.hosting,relay:intel.relay}})]);
+      [eventId,signed.requestId,eventType,signed.campaignId,signed.publisherId,signed.siteId,signed.zoneId,ipHash,userAgent,browserId||null,sessionId||null,fraud.score,valid?1:0,valid?bill:0,publisherAmount,JSON.stringify({...metadata,publisherCurrency:settlement.currency,fraudReasons:fraud.reasons,network:{source:intel.source,asn:intel.asn,asnName:intel.asnName,asnType:intel.asnType,vpn:intel.vpn,proxy:intel.proxy,tor:intel.tor,hosting:intel.hosting,relay:intel.relay}})]);
     if(valid && bill>0){
       run('UPDATE campaigns SET spent_total=spent_total+?, spent_today=spent_today+? WHERE id=?',[bill,bill,campaign.id]);
       addLedger({userId:campaign.advertiser_id,eventId,type:'AD_CHARGE',amount:-bill,currency,note:`${eventType} charge`});
-      addLedger({userId:signed.publisherId,eventId,type:'PUBLISHER_EARNING',amount:publisherAmount,currency,status:'pending',note:`${eventType} earning — 24h fraud review`});
+      addLedger({deferMirror:true,userId:signed.publisherId,eventId,type:'PUBLISHER_EARNING',amount:bill*config.publisherRevenueShare,currency,status:'pending',note:`${eventType} earning — 24h fraud review`});
     }
   });
-  tx();
+  tx.immediate();
   if(valid && eventType==='view'){
     void cacheFrequency({campaignId:campaign.id,ipHash}).catch(()=>{});
     updateAudienceSignal({browserId,sessionId,category:signed.contextCategory||'',topics:signed.contextTopics||[],personalizationAllowed:false,weight:.04});

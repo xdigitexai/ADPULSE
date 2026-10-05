@@ -84,3 +84,5 @@ See `docs/ARCHITECTURE.md` and `docs/API.md`.
 
 The additive Social / Creator Network is documented in [SOCIAL-CREATORS.md](docs/SOCIAL-CREATORS.md),
 with implementation and verification details in [SOCIAL-BUILD-REPORT.md](docs/SOCIAL-BUILD-REPORT.md).
+
+Account currency selection and audited settlement are documented in [ACCOUNT-CURRENCY.md](docs/ACCOUNT-CURRENCY.md).

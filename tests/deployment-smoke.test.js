@@ -56,6 +56,8 @@ test('production deployment smoke: boot, uploads, accounts, accounting and provi
   const accounts={};
   for(const role of ['advertiser','publisher'])accounts[role]=await api('/api/auth/register',{body:{role,email:role+'@example.test',name:'Smoke '+role,password:'Smoke-password-2026!'},status:201});
   const adv=accounts.advertiser, pub=accounts.publisher;
+  // Simulate pre-upgrade accounts: do not choose or convert their legacy currencies implicitly.
+  run('UPDATE users SET currency=NULL WHERE id IN (?,?)',[adv.user.id,pub.user.id]);
   await t.test('password login, role enforcement and demo funding disabled',async()=>{
     await api('/api/auth/login',{body:{email:'advertiser@example.test',password:'Smoke-password-2026!'}});
     await api('/api/admin/sites',{token:adv.token,status:403});
@@ -240,7 +242,7 @@ test('production deployment smoke: boot, uploads, accounts, accounting and provi
     const z=one('SELECT * FROM zones WHERE id=?',[zones.responsive.id]);
     assert.equal(await chooseCampaign({zone:z}),null);
     assert.ok(campaignDelivery(one('SELECT * FROM campaigns WHERE id=?',[c.id])).reasons.some(r=>r.includes('USD wallet')));
-    addLedger({userId:user.user.id,type:'TEST_FIXTURE',amount:10,currency:'KES'});assert.equal(await chooseCampaign({zone:z}),null);
+    run('UPDATE users SET currency=NULL WHERE id=?',[user.user.id]);addLedger({userId:user.user.id,type:'TEST_FIXTURE',amount:10,currency:'KES'});assert.equal(await chooseCampaign({zone:z}),null);
     addLedger({userId:user.user.id,type:'TEST_FIXTURE',amount:.0001,currency:'USD'});assert.equal(await chooseCampaign({zone:z}),null);
     addLedger({userId:user.user.id,type:'TEST_FIXTURE',amount:2,currency:'USD'});assert.equal((await chooseCampaign({zone:z})).id,c.id);
     run('UPDATE campaigns SET spent_today=1 WHERE id=?',[c.id]);assert.equal(await chooseCampaign({zone:z}),null);
@@ -279,4 +281,19 @@ test('production deployment smoke: boot, uploads, accounts, accounting and provi
     run('UPDATE campaigns SET house_site_ids=? WHERE id=?',['[]',house.id]);
     assert.equal((await api('/serve?zone='+zones['300x250'].publicKey,{headers})).noFill,true);
   });
+  await t.test('chosen local currency constrains deposits, campaigns, balances and mobile-money withdrawals',async()=>{
+    const localAdv=await api('/api/auth/register',{body:{role:'advertiser',currency:'KES',email:'local-adv@example.test',name:'Local advertiser',password:'Smoke-password-2026!'},status:201});
+    const localPub=await api('/api/auth/register',{body:{role:'publisher',currency:'KES',email:'local-pub@example.test',name:'Local publisher',password:'Smoke-password-2026!'},status:201});
+    assert.equal(localAdv.user.currency,'KES');
+    await api('/api/payments/initiate',{token:localAdv.token,body:{amount:100,currency:'USD',gateway:'card'},status:400});
+    await api('/api/advertiser/campaigns',{token:localAdv.token,body:{name:'Wrong currency',headline:'Wrong currency',destinationUrl:'https://example.test',model:'CPC',cpc:1,currency:'USD',budgetTotal:10,budgetDaily:1},status:400});
+    const payment=await api('/api/payments/initiate',{token:localAdv.token,body:{amount:100,currency:'KES',gateway:'mobile',phone:'254700000000'},status:201});payments.get(payment.reference).status='completed';
+    await api('/api/payments/'+payment.reference+'/status',{token:localAdv.token});await api('/api/payments/'+payment.reference+'/status',{token:localAdv.token});
+    assert.equal(balanceFor(localAdv.user.id,'KES'),100);assert.equal(balanceFor(localAdv.user.id,'USD'),0);
+    const choices=(await api('/api/me',{token:localAdv.token})).balances;assert.deepEqual(choices,[{currency:'KES',balance:100}]);
+    addLedger({userId:localPub.user.id,type:'TEST_FIXTURE',amount:2000,currency:'KES'});
+    await api('/api/publisher/withdrawals',{token:localPub.token,body:{amount:500,currency:'UGX',accountNumber:'254700000000'},status:400});
+    await api('/api/publisher/withdrawals',{token:localPub.token,body:{amount:500,currency:'KES',accountNumber:'254700000000'},status:201});assert.equal(balanceFor(localPub.user.id,'KES'),1485);
+  });
+
 });

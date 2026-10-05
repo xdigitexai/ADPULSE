@@ -6,6 +6,7 @@ import { nanoid } from 'nanoid';
 import { config } from './config.js';
 import { mirrorLedger } from './production-store.js';
 import {migrateSocial} from './social/schema.js';
+import {migrateCurrency,convertCurrency} from './currency-rates.js';
 
 fs.mkdirSync(path.dirname(config.dbPath), { recursive: true });
 export const db = new Database(config.dbPath);
@@ -291,6 +292,7 @@ for(const row of db.prepare("SELECT id FROM sites WHERE seller_id IS NULL OR sel
 }
 
 migrateSocial(db);
+migrateCurrency(db);
 export function id(prefix='id') { return `${prefix}_${nanoid(16)}`; }
 export function one(sql, params=[]) { return db.prepare(sql).get(...params); }
 export function all(sql, params=[]) { return db.prepare(sql).all(...params); }
@@ -304,17 +306,28 @@ export function balancesFor(userId){
   return all("SELECT currency,ROUND(COALESCE(SUM(amount),0),6) balance FROM ledger_entries WHERE user_id=? AND status IN ('finalized','available') GROUP BY currency ORDER BY currency",[userId]);
 }
 
+export function earningInCurrency(userId,amount,sourceCurrency){const target=one('SELECT currency FROM users WHERE id=?',[userId])?.currency||sourceCurrency;return {...convertCurrency(db,amount,sourceCurrency,target),currency:target};}
+export function settledEarning(earning){const settled=one('SELECT target_currency,target_amount FROM currency_settlements WHERE ledger_id=?',[earning.id]);return settled?{amount:settled.target_amount,currency:settled.target_currency}:{amount:earning.amount,currency:earning.currency};}
+
 export function finalizeMaturePublisherEarnings(){
   return run("UPDATE ledger_entries SET status='available' WHERE type='PUBLISHER_EARNING' AND status='pending' AND created_at<=datetime('now','-24 hours')").changes;
 }
 
 export function addLedger({userId,eventId=null,type,amount,currency='USD',status='finalized',note=null,deferMirror=false}) {
+  return db.transaction(()=>{
+  if(db.inTransaction)deferMirror=true;
+  const preferred=one('SELECT currency FROM users WHERE id=?',[userId])?.currency;
+  const source={amount:Number(amount),currency:String(currency).toUpperCase()};
+  const settlement=preferred&&preferred!==source.currency?convertCurrency(db,source.amount,source.currency,preferred):null;
+  if(settlement){amount=settlement.amount;currency=preferred;deferMirror=true;}
   const entry = { id:id('led'), userId, eventId, type, amount:Number(amount), currency, status, note };
   run('INSERT INTO ledger_entries(id,user_id,event_id,type,amount,currency,status,note) VALUES(?,?,?,?,?,?,?,?)',
     [entry.id,entry.userId,entry.eventId,entry.type,entry.amount,entry.currency,entry.status,entry.note]);
+  if(settlement&&source.amount!==0)run('INSERT INTO currency_settlements(ledger_id,source_currency,source_amount,target_currency,target_amount,rate,rate_date) VALUES(?,?,?,?,?,?,?)',[entry.id,source.currency,source.amount,currency,entry.amount,settlement.rate,settlement.date]);
   if(deferMirror)queueMicrotask(()=>{const persisted=one('SELECT status FROM ledger_entries WHERE id=?',[entry.id]);if(persisted)void mirrorLedger({...entry,status:persisted.status}).catch(()=>{});});
   else void mirrorLedger(entry).catch(()=>{});
   return entry;
+  }).immediate();
 }
 
 export async function ensureAdmin() {

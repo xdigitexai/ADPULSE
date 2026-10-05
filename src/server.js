@@ -23,6 +23,8 @@ import { hashIp } from './fraud.js';
 import { fetchPublisherPath, safeFetchUrl } from './safe-fetch.js';
 import { updateAudienceSignal, isSensitiveInterest } from './audience-engine.js';
 import {registerSocial,creatorConversionHook} from './social/routes.js';
+import {registerCurrency,assertAccountCurrency,preferredBalances,reportAmount} from './account-currency.js';
+import {refreshCurrencyRates} from './currency-rates.js';
 
 const storeState=await initProductionStores().catch(err=>{console.error('Production stores unavailable:',err.message);return {postgres:false,redis:false,clickhouse:false}});
 if(config.productionStoresRequired && (!storeState.postgres || !storeState.redis || !storeState.clickhouse)) throw new Error('PRODUCTION_STORES_REQUIRED is enabled but one or more production stores are unavailable');
@@ -59,6 +61,9 @@ const limiter=new RateLimiterMemory({points:180,duration:60});
 app.use('/api',async(req,res,next)=>{try{await limiter.consume(req.ip);next()}catch{res.status(429).json({error:'Rate limit exceeded'})}});
 
 const wrap=(fn)=>(req,res,next)=>Promise.resolve(fn(req,res,next)).catch(next);
+registerCurrency(app,{auth,wrap});
+void refreshCurrencyRates(db).catch(()=>console.warn("Currency rates unavailable; cross-currency settlement is paused"));
+setInterval(()=>{void refreshCurrencyRates(db).catch(()=>{});},3600000).unref();
 const normalizeDomain=(raw)=>new URL(raw.match(/^https?:\/\//)?raw:`https://${raw}`).hostname.toLowerCase().replace(/^www\./,'');
 const requireOwner=(row,userId,field)=>{ if(!row || (row[field]!==userId)) throw Object.assign(new Error('Not found'),{status:404}); };
 const AD_FORMATS={responsive:[null,null],'300x250':[300,250],'336x280':[336,280],'728x90':[728,90],'970x250':[970,250],'320x50':[320,50],'320x100':[320,100],'300x600':[300,600],'160x600':[160,600],'native':[null,null],'video':[640,360]};
@@ -76,35 +81,37 @@ app.get('/payment-return',(req,res)=>res.redirect('/?payment=return'));
 app.post('/api/auth/register',wrap(async(req,res)=>{const result=await register(req.body);run("INSERT INTO account_ip_history(id,user_id,ip_hash) VALUES(?,?,?) ON CONFLICT(user_id,ip_hash) DO UPDATE SET last_seen=CURRENT_TIMESTAMP",[id('aip'),result.user.id,hashIp(req.ip)]);res.status(201).json(result)}));
 app.post('/api/auth/login',wrap(async(req,res)=>{const result=await login(req.body.email,req.body.password);run("INSERT INTO account_ip_history(id,user_id,ip_hash) VALUES(?,?,?) ON CONFLICT(user_id,ip_hash) DO UPDATE SET last_seen=CURRENT_TIMESTAMP",[id('aip'),result.user.id,hashIp(req.ip)]);res.json(result)}));
 app.get('/api/auth/google/config',(req,res)=>res.json({clientId:config.googleClientId||null}));
-app.post('/api/auth/google',wrap(async(req,res)=>{const role=['advertiser','publisher'].includes(req.body?.role)?req.body.role:null;const result=await loginWithGoogle(req.body?.credential,role);if(result.needsRole)return res.json(result);run("INSERT INTO account_ip_history(id,user_id,ip_hash) VALUES(?,?,?) ON CONFLICT(user_id,ip_hash) DO UPDATE SET last_seen=CURRENT_TIMESTAMP",[id('aip'),result.user.id,hashIp(req.ip)]);res.json(result)}));
-app.get('/api/me',auth(),(req,res)=>res.json({user:req.user,balance:balanceFor(req.user.id),balances:balancesFor(req.user.id)}));
+app.post('/api/auth/google',wrap(async(req,res)=>{const role=['advertiser','publisher'].includes(req.body?.role)?req.body.role:null;const result=await loginWithGoogle(req.body?.credential,role,req.body?.currency||'USD');if(result.needsRole)return res.json(result);run("INSERT INTO account_ip_history(id,user_id,ip_hash) VALUES(?,?,?) ON CONFLICT(user_id,ip_hash) DO UPDATE SET last_seen=CURRENT_TIMESTAMP",[id('aip'),result.user.id,hashIp(req.ip)]);res.json(result)}));
+app.get('/api/me',auth(),(req,res)=>res.json({user:req.user,balance:balanceFor(req.user.id,req.user.currency||'USD'),balances:preferredBalances(req.user.id)}));
 
 app.get('/api/dashboard',auth(),(req,res)=>{
   finalizeMaturePublisherEarnings();
   const u=req.user;
   if(u.role==='publisher'){
+    const revenue=reportAmount(u.currency,all("SELECT SUM(COALESCE(cs.target_amount,e.publisher_amount)) amount,COALESCE(cs.target_currency,json_extract(e.metadata,'$.publisherCurrency'),c.currency,'USD') currency FROM ad_events e LEFT JOIN campaigns c ON c.id=e.campaign_id LEFT JOIN ledger_entries le ON le.event_id=e.id AND le.type='PUBLISHER_EARNING' AND le.status<>'converted' LEFT JOIN currency_settlements cs ON cs.ledger_id=le.id WHERE e.publisher_id=? GROUP BY COALESCE(cs.target_currency,json_extract(e.metadata,'$.publisherCurrency'),c.currency,'USD')",[u.id]));
     return res.json({
-      balance:balanceFor(u.id),
-      balances:balancesFor(u.id),
+      balance:balanceFor(u.id,u.currency||'USD'),currency:u.currency||null,
+      balances:preferredBalances(u.id),
       sites:all("SELECT s.*, (SELECT COUNT(DISTINCT request_id) FROM ad_events WHERE site_id=s.id AND event_type='render') ads_shown,(SELECT COUNT(DISTINCT request_id) FROM ad_events WHERE site_id=s.id AND event_type='view' AND valid=1) impressions FROM sites s WHERE publisher_id=? ORDER BY created_at DESC",[u.id]),
       zones:all('SELECT * FROM zones WHERE publisher_id=? ORDER BY created_at DESC',[u.id]),
-      metrics:one(`SELECT COUNT(*) events,
+      metrics:{...one(`SELECT COUNT(*) events,
         SUM(CASE WHEN event_type='view' AND valid=1 THEN 1 ELSE 0 END) views,
         SUM(CASE WHEN event_type='click' AND valid=1 THEN 1 ELSE 0 END) clicks,
         COALESCE(SUM(publisher_amount),0) revenue
-        FROM ad_events WHERE publisher_id=?`,[u.id])
+        FROM ad_events WHERE publisher_id=?`,[u.id]),revenue}
     });
   }
   if(u.role==='advertiser'){
+    const spend=reportAmount(u.currency,all('SELECT SUM(e.bill_amount) amount,c.currency FROM ad_events e JOIN campaigns c ON c.id=e.campaign_id WHERE c.advertiser_id=? GROUP BY c.currency',[u.id]));
     return res.json({
-      balance:balanceFor(u.id),
-      balances:balancesFor(u.id),
+      balance:balanceFor(u.id,u.currency||'USD'),currency:u.currency||null,
+      balances:preferredBalances(u.id),
       campaigns:all('SELECT * FROM campaigns WHERE advertiser_id=? ORDER BY created_at DESC',[u.id]).map(c=>({...c,delivery:campaignDelivery(c)})),
-      metrics:one(`SELECT COUNT(*) events,
+      metrics:{...one(`SELECT COUNT(*) events,
         SUM(CASE WHEN event_type='view' AND valid=1 THEN 1 ELSE 0 END) views,
         SUM(CASE WHEN event_type='click' AND valid=1 THEN 1 ELSE 0 END) clicks,
         COALESCE(SUM(bill_amount),0) spend
-        FROM ad_events WHERE campaign_id IN (SELECT id FROM campaigns WHERE advertiser_id=?)`,[u.id])
+        FROM ad_events WHERE campaign_id IN (SELECT id FROM campaigns WHERE advertiser_id=?)`,[u.id]),spend}
     });
   }
   res.json({
@@ -291,7 +298,7 @@ app.post('/api/advertiser/campaigns',auth('advertiser'),(req,res)=>{
     model:z.enum(['CPM','CPC','HYBRID']),currency:z.enum(['KES','CDF','UGX','XOF','XAF','RWF','ZMW','SLE','USD']).default('USD'),cpm:z.number().min(0).default(0),cpc:z.number().min(0).default(0),budgetTotal:z.number().positive(),budgetDaily:z.number().positive(),frequencyCapDaily:z.number().int().min(1).max(50).default(3),conversionWindowDays:z.number().int().min(1).max(30).default(7),startsAt:z.string().optional(),endsAt:z.string().optional(),
     countries:z.array(z.string()).default([]),categories:z.array(z.string()).default([]),devices:z.array(z.string()).default([]),interests:z.array(z.string()).default([]),excludeInterests:z.array(z.string()).default([])
   });
-  const d=schema.parse(req.body);
+  const d=schema.parse(req.body);assertAccountCurrency(req.user,d.currency);
   if(d.model!=='CPC' && d.cpm<=0) return res.status(400).json({error:'CPM must be greater than zero'});
   if(d.model!=='CPM' && d.cpc<=0) return res.status(400).json({error:'CPC must be greater than zero'});
   if(d.interests.some(isSensitiveInterest)) return res.status(400).json({error:'Sensitive interests cannot be used for persistent audience targeting. Use contextual category targeting instead.'});
@@ -345,7 +352,7 @@ app.post('/api/payments/initiate',auth('advertiser'),wrap(async(req,res)=>{
     lastName:z.string().max(80).optional(),
     description:z.string().max(180).optional()
   });
-  const d=schema.parse(req.body), currency=assertCurrency(d.currency), gateway=assertGateway(d.gateway);
+  const d=schema.parse(req.body), currency=assertAccountCurrency(req.user,d.currency), gateway=assertGateway(d.gateway);
   if(!['mobile','card'].includes(gateway))return res.status(400).json({error:'Choose Mobile Money Africa or Card'});
   if(gateway==='mobile' && currency==='USD')return res.status(400).json({error:'Mobile money uses your local currency. Use Card for USD funding.'});
   if(gateway==='mobile' && !d.phone) return res.status(400).json({error:'Phone is required for pan-Africa mobile money'});
@@ -413,7 +420,7 @@ app.post('/api/publisher/withdrawals',auth('publisher'),wrap(async(req,res)=>{
   finalizeMaturePublisherEarnings();
   // Withdrawals retain balance, maturity and provider checks; no platform KYC gate.
   const schema=z.object({amount:z.number().positive(),currency:z.string(),accountNumber:z.string().min(8).max(30)});
-  const d=schema.parse(req.body),currency=assertCurrency(d.currency);
+  const d=schema.parse(req.body),currency=assertAccountCurrency(req.user,d.currency);
   const minimum=Number(config.minimumPayouts?.[currency]||0);
   if(minimum>0 && d.amount<minimum) return res.status(400).json({error:`Minimum payout for ${currency} is ${minimum}`});
   if(currency==='USD') return res.status(400).json({error:'Mobile-money withdrawal does not support USD on this route'});
@@ -446,7 +453,7 @@ app.post('/api/advertiser/demo-fund',auth('advertiser'),(req,res)=>{
   res.json({balance:balanceFor(req.user.id)});
 });
 
-app.get('/api/ledger',auth(),(req,res)=>{ finalizeMaturePublisherEarnings(); return res.json({balance:balanceFor(req.user.id),balances:balancesFor(req.user.id),entries:all('SELECT * FROM ledger_entries WHERE user_id=? ORDER BY created_at DESC LIMIT 200',[req.user.id])}); });
+app.get('/api/ledger',auth(),(req,res)=>{ finalizeMaturePublisherEarnings(); return res.json({balance:balanceFor(req.user.id,req.user.currency||'USD'),balances:preferredBalances(req.user.id),entries:all('SELECT * FROM ledger_entries WHERE user_id=? ORDER BY created_at DESC LIMIT 200',[req.user.id])}); });
 
 app.get('/api/analytics/publisher',auth('publisher'),(req,res)=>{
   const byDay=all(`SELECT substr(created_at,1,10) day,
@@ -463,7 +470,7 @@ app.get('/api/analytics/publisher',auth('publisher'),(req,res)=>{
     ROUND(COALESCE(SUM(publisher_amount),0),6) revenue,
     ROUND(100.0*SUM(CASE WHEN event_type='click' AND valid=1 THEN 1 ELSE 0 END)/NULLIF(SUM(CASE WHEN event_type='view' AND valid=1 THEN 1 ELSE 0 END),0),2) ctr
     FROM ad_events WHERE publisher_id=?`,[req.user.id]);
-  res.json({totals,byDay});
+  const rows=all("SELECT SUM(COALESCE(cs.target_amount,e.publisher_amount)) amount,COALESCE(cs.target_currency,json_extract(e.metadata,'$.publisherCurrency'),c.currency,'USD') currency FROM ad_events e LEFT JOIN campaigns c ON c.id=e.campaign_id LEFT JOIN ledger_entries le ON le.event_id=e.id AND le.type='PUBLISHER_EARNING' AND le.status<>'converted' LEFT JOIN currency_settlements cs ON cs.ledger_id=le.id WHERE e.publisher_id=? GROUP BY COALESCE(cs.target_currency,json_extract(e.metadata,'$.publisherCurrency'),c.currency,'USD')",[req.user.id]);totals.revenue=reportAmount(req.user.currency,rows);for(const day of byDay)day.revenue=reportAmount(req.user.currency,all("SELECT SUM(COALESCE(cs.target_amount,e.publisher_amount)) amount,COALESCE(cs.target_currency,json_extract(e.metadata,'$.publisherCurrency'),c.currency,'USD') currency FROM ad_events e LEFT JOIN campaigns c ON c.id=e.campaign_id LEFT JOIN ledger_entries le ON le.event_id=e.id AND le.type='PUBLISHER_EARNING' AND le.status<>'converted' LEFT JOIN currency_settlements cs ON cs.ledger_id=le.id WHERE e.publisher_id=? AND substr(e.created_at,1,10)=? GROUP BY COALESCE(cs.target_currency,json_extract(e.metadata,'$.publisherCurrency'),c.currency,'USD')",[req.user.id,day.day]));res.json({totals,byDay,currency:req.user.currency||'USD',historicalRateConversion:true});
 });
 
 app.get('/api/analytics/advertiser',auth('advertiser'),(req,res)=>{
@@ -474,7 +481,7 @@ app.get('/api/analytics/advertiser',auth('advertiser'),(req,res)=>{
     ROUND(100.0*SUM(CASE WHEN e.event_type='click' AND e.valid=1 THEN 1 ELSE 0 END)/NULLIF(SUM(CASE WHEN e.event_type='view' AND e.valid=1 THEN 1 ELSE 0 END),0),2) ctr
     FROM ad_events e JOIN campaigns c ON c.id=e.campaign_id WHERE c.advertiser_id=?`,[req.user.id]);
   const conv=one('SELECT COUNT(*) conversions,ROUND(COALESCE(SUM(value),0),6) conversion_value FROM conversions WHERE advertiser_id=?',[req.user.id]);
-  res.json({totals:{...totals,...conv}});
+  totals.spend=reportAmount(req.user.currency,all('SELECT SUM(e.bill_amount) amount,c.currency FROM ad_events e JOIN campaigns c ON c.id=e.campaign_id WHERE c.advertiser_id=? GROUP BY c.currency',[req.user.id]));conv.conversion_value=reportAmount(req.user.currency,all('SELECT SUM(value) amount,currency FROM conversions WHERE advertiser_id=? GROUP BY currency',[req.user.id]));res.json({totals:{...totals,...conv},currency:req.user.currency||'USD'});
 });
 
 app.post('/collect/conversion',(req,res)=>{
