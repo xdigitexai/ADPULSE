@@ -157,6 +157,14 @@ CREATE TABLE IF NOT EXISTS conversions (
   UNIQUE(advertiser_id, external_id)
 );
 CREATE INDEX IF NOT EXISTS idx_conversions_campaign ON conversions(campaign_id, created_at);
+CREATE TABLE IF NOT EXISTS admin_support_sessions (
+  id TEXT PRIMARY KEY,
+  admin_id TEXT NOT NULL REFERENCES users(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at TEXT NOT NULL,
+  ended_at TEXT
+);
 CREATE TABLE IF NOT EXISTS payment_transactions (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id),

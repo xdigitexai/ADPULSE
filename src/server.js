@@ -9,9 +9,10 @@ import multer from 'multer';
 import { z } from 'zod';
 import { RateLimiterMemory } from 'rate-limiter-flexible';
 import { config } from './config.js';
+import {campaignDelivery} from './campaign-delivery.js';
 import { zoneDisplaySettings, mergeDisplaySettings } from './display-settings.js';
 import { db, id, one, all, run, balanceFor, balancesFor, addLedger, ensureAdmin, finalizeMaturePublisherEarnings } from './db.js';
-import { register, login, loginWithGoogle, auth } from './auth.js';
+import { register, login, loginWithGoogle, auth, issueSupportToken } from './auth.js';
 import { makeAdRequest, recordEvent, resetDailySpendIfNeeded, verifyEvent } from './ad-engine.js';
 import { xdigitexPay, assertCurrency, assertGateway } from './xdigitex-pay.js';
 import { initProductionStores, productionStatus, writeConversion, mirrorSiteContext } from './production-store.js';
@@ -97,7 +98,7 @@ app.get('/api/dashboard',auth(),(req,res)=>{
     return res.json({
       balance:balanceFor(u.id),
       balances:balancesFor(u.id),
-      campaigns:all('SELECT * FROM campaigns WHERE advertiser_id=? ORDER BY created_at DESC',[u.id]),
+      campaigns:all('SELECT * FROM campaigns WHERE advertiser_id=? ORDER BY created_at DESC',[u.id]).map(c=>({...c,delivery:campaignDelivery(c)})),
       metrics:one(`SELECT COUNT(*) events,
         SUM(CASE WHEN event_type='view' AND valid=1 THEN 1 ELSE 0 END) views,
         SUM(CASE WHEN event_type='click' AND valid=1 THEN 1 ELSE 0 END) clicks,
@@ -300,7 +301,7 @@ app.post('/api/advertiser/campaigns',auth('advertiser'),(req,res)=>{
   res.status(201).json(one('SELECT * FROM campaigns WHERE id=?',[cid]));
 });
 
-app.get('/api/advertiser/campaigns',auth('advertiser'),(req,res)=>res.json(all('SELECT * FROM campaigns WHERE advertiser_id=? ORDER BY created_at DESC',[req.user.id])));
+app.get('/api/advertiser/campaigns',auth('advertiser'),(req,res)=>res.json(all('SELECT * FROM campaigns WHERE advertiser_id=? ORDER BY created_at DESC',[req.user.id]).map(c=>({...c,delivery:campaignDelivery(c)}))));
 app.post('/api/advertiser/campaigns/:id/status',auth('advertiser'),(req,res)=>{
   const campaign=one('SELECT * FROM campaigns WHERE id=?',[req.params.id]); requireOwner(campaign,req.user.id,'advertiser_id');
   const status=z.enum(['active','paused']).parse(req.body.status);
@@ -324,7 +325,7 @@ app.post('/api/advertiser/uploads',auth('advertiser'),upload.single('file'),(req
   res.status(201).json({url:new URL(relative,config.appUrl).toString(),path:relative,mime:req.file.mimetype,size:req.file.size});
 });
 
-app.get('/api/payments/gateways',auth(),wrap(async(req,res)=>res.json(await xdigitexPay.gateways())));
+app.get('/api/payments/gateways',auth(),wrap(async(req,res)=>{const result=await xdigitexPay.gateways();res.json({...result,gateways:(result.gateways||result.data?.gateways||[]).filter(g=>['mobile','card'].includes(g.id)).map(g=>({...g,name:g.id==='mobile'?'Mobile Money Africa':'Card · Visa / Mastercard'}))})}));
 
 app.post('/api/profile/kyc',auth(),(req,res)=>{
   const schema=z.object({phone:z.string().min(8).max(30),country:z.string().min(2).max(2)});
@@ -344,6 +345,8 @@ app.post('/api/payments/initiate',auth('advertiser'),wrap(async(req,res)=>{
     description:z.string().max(180).optional()
   });
   const d=schema.parse(req.body), currency=assertCurrency(d.currency), gateway=assertGateway(d.gateway);
+  if(!['mobile','card'].includes(gateway))return res.status(400).json({error:'Choose Mobile Money Africa or Card'});
+  if(gateway==='mobile' && currency==='USD')return res.status(400).json({error:'Mobile money uses your local currency. Use Card for USD funding.'});
   if(gateway==='mobile' && !d.phone) return res.status(400).json({error:'Phone is required for pan-Africa mobile money'});
   const payload={
     amount:d.amount,currency,gateway,email:req.user.email,
@@ -357,7 +360,7 @@ app.post('/api/payments/initiate',auth('advertiser'),wrap(async(req,res)=>{
   const result=await xdigitexPay.initiatePayment(payload);
   run(`INSERT OR IGNORE INTO payment_transactions(id,user_id,reference,kind,gateway,amount,fee,net_amount,currency,status,provider_payload)
        VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
-    [id('pay'),req.user.id,result.reference,'deposit',gateway,Number(result.amount??d.amount),Number(result.fee||0),Number(result.net_amount??0),currency,'pending',JSON.stringify(result)]);
+    [id('pay'),req.user.id,result.reference,'deposit',gateway,Number(result.amount??d.amount),Number(result.fee||0),Number(result.net_amount??0),assertCurrency(result.currency||currency),'pending',JSON.stringify(result)]);
   res.status(201).json(result);
 }));
 
@@ -381,6 +384,12 @@ async function finalizeDeposit(reference){
   });
   return {credited:apply(),status};
 }
+
+let reconcilingDeposits=false;
+const depositPoller=setInterval(async()=>{
+  if(reconcilingDeposits)return;reconcilingDeposits=true;
+  try{for(const tx of all("SELECT reference FROM payment_transactions WHERE kind='deposit' AND status IN ('pending','processing') AND created_at>datetime('now','-7 days') ORDER BY updated_at ASC LIMIT 20")){try{await finalizeDeposit(tx.reference)}catch{console.warn('Pending deposit check temporarily unavailable')}}}finally{reconcilingDeposits=false}
+},60000);depositPoller.unref();
 
 app.get('/api/payments/:reference/status',auth(),wrap(async(req,res)=>{
   const tx=one('SELECT * FROM payment_transactions WHERE reference=?',[req.params.reference]);
@@ -569,6 +578,18 @@ app.get('/r/click',wrap(async(req,res)=>{
   const target=new URL(campaign.destination_url); target.searchParams.set('_aprid',payload.requestId);
   res.redirect(302,target.toString());
 }));
+
+app.post('/api/admin/users/:id/login-as',auth('admin'),(req,res)=>{
+  if(req.user.supportSession)return res.status(403).json({error:'Nested support sessions are not allowed'});
+  const user=one('SELECT id,email,name,role,status,kyc_status,phone,country FROM users WHERE id=?',[req.params.id]);
+  if(!user||user.role==='admin'||user.status!=='active')return res.status(400).json({error:'Choose an active non-admin account'});
+  const sessionId=id('support');run("INSERT INTO admin_support_sessions(id,admin_id,user_id,expires_at) VALUES(?,?,?,datetime('now','+15 minutes'))",[sessionId,req.user.id,user.id]);
+  res.json(issueSupportToken(user,req.user,sessionId));
+});
+app.post('/api/support-session/end',auth(),(req,res)=>{
+  if(!req.user.supportSession)return res.status(400).json({error:'No support session'});
+  run('UPDATE admin_support_sessions SET ended_at=CURRENT_TIMESTAMP WHERE id=?',[req.user.supportSession.id]);res.json({ok:true});
+});
 
 app.get('/api/admin/site-policy',auth('admin'),(req,res)=>res.json({autoApprove:one("SELECT value FROM system_settings WHERE key='auto_approve_domains'")?.value!=='false'}));
 app.post('/api/admin/site-policy',auth('admin'),(req,res)=>{const d=z.object({autoApprove:z.boolean()}).parse(req.body);run("INSERT INTO system_settings(key,value,updated_at) VALUES('auto_approve_domains',?,CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP",[String(d.autoApprove)]);res.json(d)});

@@ -6,12 +6,14 @@ import { hashIp, deviceFromUA, scoreEvent } from './fraud.js';
 import { getFrequency, cacheFrequency, writeAdEvent } from './production-store.js';
 import { enrichIp } from './ip-intelligence.js';
 import { audienceFor, interestMatchScore, updateAudienceSignal } from './audience-engine.js';
+import {unitCharge} from './campaign-delivery.js';
 import {zoneDisplaySettings} from './display-settings.js';
 
 const json = (s) => { try{return JSON.parse(s||'[]')}catch{return []} };
 const today = () => new Date().toISOString().slice(0,10);
 
 export async function chooseCampaign({zone,country='',device='desktop',ipHash='',contextCategory='',browserId='',sessionId='',personalizationAllowed=false,previousCampaignId='',excludedCampaignIds=[]}) {
+  resetDailySpendIfNeeded();
   const site=one('SELECT * FROM sites WHERE id=?',[zone.site_id]);
   const rows=all("SELECT c.* FROM campaigns c WHERE c.status='active' AND c.spent_total < c.budget_total");
   const effectiveCategory=contextCategory||site.category;
@@ -45,7 +47,8 @@ export async function chooseCampaign({zone,country='',device='desktop',ipHash=''
     if(interest.blocked) continue;
     if(!c.is_house && c.model!=='CPC' && c.cpm < Number(zone.floor_cpm||0)) continue;
     const bal=balanceFor(c.advertiser_id,c.currency||'USD');
-    if(!c.is_house && bal<=0) continue;
+    if(!c.is_house && (bal<unitCharge(c)||unitCharge(c)<=0)) continue;
+    if(!c.is_house && (c.spent_total+unitCharge(c)>c.budget_total||(c.budget_daily>0&&c.spent_today+unitCharge(c)>c.budget_daily)))continue;
     eligible.push({...c,_interestScore:interest.score});
   }
   if(!eligible.length) return null;

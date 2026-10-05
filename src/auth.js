@@ -36,6 +36,8 @@ export function issueToken(user){
   return {token,user};
 }
 
+export function issueSupportToken(user,actor,sessionId){return {token:jwt.sign({sub:user.id,role:user.role,email:user.email,supportSessionId:sessionId,actor:actor.id},config.jwtSecret,{expiresIn:'15m'}),user:{...user,supportSession:{id:sessionId,admin:actor.email}}};}
+
 export function auth(requiredRole=null){
   return (req,res,next)=>{
     try{
@@ -45,6 +47,12 @@ export function auth(requiredRole=null){
       const user=one('SELECT id,email,role,name,status,kyc_status,phone,country FROM users WHERE id=?',[payload.sub]);
       if(!user || user.status!=='active') return res.status(401).json({error:'Account unavailable'});
       if(requiredRole && user.role!==requiredRole && user.role!=='admin') return res.status(403).json({error:'Insufficient role'});
+      if(payload.supportSessionId){
+        const support=one("SELECT s.id,u.email FROM admin_support_sessions s JOIN users u ON u.id=s.admin_id WHERE s.id=? AND s.admin_id=? AND s.user_id=? AND s.ended_at IS NULL AND s.expires_at>datetime('now') AND u.role='admin' AND u.status='active'",[payload.supportSessionId,payload.actor,user.id]);
+        if(!support)return res.status(401).json({error:'Support session expired or ended'});
+        user.supportSession={id:support.id,admin:support.email};
+        if(req.method==='POST'&&['/api/payments/initiate','/api/publisher/withdrawals','/api/advertiser/demo-fund'].includes(req.path))return res.status(403).json({error:'Payments and withdrawals are disabled while assisting a user'});
+      }
       req.user=user; next();
     }catch{ res.status(401).json({error:'Invalid or expired token'}); }
   };

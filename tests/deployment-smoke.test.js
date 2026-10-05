@@ -19,6 +19,7 @@ test('production deployment smoke: boot, uploads, accounts, accounting and provi
       payments.set(reference,{reference,status:'pending',amount:data.amount,net_amount:data.amount,currency:data.currency});
       return res.end(JSON.stringify(payments.get(reference)));
     }
+    if(req.url==='/gateways')return res.end(JSON.stringify({gateways:[{id:'mobile',enabled:true,currencies:['KES','UGX']},{id:'card',enabled:true,currencies:['USD','KES']},{id:'crypto',enabled:true},{id:'airtel',enabled:true},{id:'safaricom',enabled:true}]}));
     if(req.url.startsWith('/payments/'))return res.end(JSON.stringify(payments.get(req.url.split('/')[2])));
     if(req.url==='/withdrawals'&&req.method==='POST'){
       const row={reference:'mock-w-'+(++nextWithdrawal),status:'processing',amount:data.amount,fee:data.amount*.03};
@@ -73,6 +74,29 @@ test('production deployment smoke: boot, uploads, accounts, accounting and provi
     await api('/api/admin/site-policy',{token:admin,body:{autoApprove:false}});
     assert.equal((await api('/api/admin/site-policy',{token:admin})).autoApprove,false);
     await api('/api/admin/site-policy',{token:admin,body:{autoApprove:true}});
+  });
+  await t.test('admin support sessions enforce identity, expiry, audit and money restrictions',async()=>{
+    await api('/api/admin/users/'+pub.user.id+'/login-as',{token:adv.token,body:{},status:403});
+    const supported=await api('/api/admin/users/'+pub.user.id+'/login-as',{token:admin,body:{}});
+    assert.equal(supported.user.id,pub.user.id);assert.ok(supported.user.supportSession);
+    const sid=supported.user.supportSession.id;assert.equal(one('SELECT user_id FROM admin_support_sessions WHERE id=?',[sid]).user_id,pub.user.id);
+    assert.equal((await api('/api/me',{token:supported.token})).user.supportSession.id,sid);
+    await api('/api/admin/sites',{token:supported.token,status:403});
+    await api('/api/payments/initiate',{token:supported.token,body:{amount:10,currency:'KES',gateway:'mobile',phone:'254700000000'},status:403});
+    await api('/api/publisher/withdrawals',{token:supported.token,body:{amount:500,currency:'KES',accountNumber:'254700000000'},status:403});
+    await api('/api/support-session/end',{token:supported.token,body:{}});
+    assert.ok(one('SELECT ended_at FROM admin_support_sessions WHERE id=?',[sid]).ended_at);
+    await api('/api/me',{token:supported.token,status:401});
+    const expired=await api('/api/admin/users/'+adv.user.id+'/login-as',{token:admin,body:{}});
+    run("UPDATE admin_support_sessions SET expires_at=datetime('now','-1 minute') WHERE id=?",[expired.user.supportSession.id]);
+    await api('/api/me',{token:expired.token,status:401});
+    const adminId=one('SELECT id FROM users WHERE role=?',['admin']).id;
+    await api('/api/admin/users/'+adminId+'/login-as',{token:admin,body:{},status:400});
+  });
+  await t.test('only mobile Africa and card rails are accepted',async()=>{
+    assert.deepEqual((await api('/api/payments/gateways',{token:adv.token})).gateways.map(g=>g.id),['mobile','card']);
+    for(const gateway of ['crypto','safaricom','airtel'])await api('/api/payments/initiate',{token:adv.token,body:{amount:10,currency:'KES',gateway},status:400});
+    await api('/api/payments/initiate',{token:adv.token,body:{amount:10,currency:'USD',gateway:'mobile',phone:'254700000000'},status:400});
   });
   await t.test('all supported creative uploads and unsafe file rejection',async()=>{
     for(const [mime,ext] of [['image/jpeg','jpg'],['image/png','png'],['image/webp','webp'],['image/gif','gif'],['video/mp4','mp4'],['video/webm','webm']]){
@@ -206,6 +230,23 @@ test('production deployment smoke: boot, uploads, accounts, accounting and provi
   await t.test('strict production startup fails when required stores are unavailable',()=>{
     const failed=spawnSync(process.execPath,['src/server.js'],{env:{...process.env,PRODUCTION_STORES_REQUIRED:'true'},encoding:'utf8',timeout:10000});
     assert.notEqual(failed.status,0);assert.match(failed.stderr,/one or more production stores are unavailable/);
+  });
+  await t.test('unfunded paid campaigns do not fill; wallet currency and daily rollover govern readiness',async()=>{
+    const {chooseCampaign}=await import('../src/ad-engine.js'),{campaignDelivery}=await import('../src/campaign-delivery.js');
+    const user=await api('/api/auth/register',{body:{role:'advertiser',email:'unfunded@example.test',name:'Unfunded fixture',password:'Smoke-password-2026!'},status:201});
+    const c=await api('/api/advertiser/campaigns',{token:user.token,body:{name:'Funding fixture',headline:'Funding test',destinationUrl:'https://example.test',model:'CPM',currency:'USD',cpm:1,budgetTotal:10,budgetDaily:1},status:201});
+    await api('/api/admin/campaigns/'+c.id+'/status',{token:admin,body:{status:'active'}});
+    run("UPDATE campaigns SET status='paused' WHERE id!=?",[c.id]);
+    const z=one('SELECT * FROM zones WHERE id=?',[zones.responsive.id]);
+    assert.equal(await chooseCampaign({zone:z}),null);
+    assert.ok(campaignDelivery(one('SELECT * FROM campaigns WHERE id=?',[c.id])).reasons.some(r=>r.includes('USD wallet')));
+    addLedger({userId:user.user.id,type:'TEST_FIXTURE',amount:10,currency:'KES'});assert.equal(await chooseCampaign({zone:z}),null);
+    addLedger({userId:user.user.id,type:'TEST_FIXTURE',amount:.0001,currency:'USD'});assert.equal(await chooseCampaign({zone:z}),null);
+    addLedger({userId:user.user.id,type:'TEST_FIXTURE',amount:2,currency:'USD'});assert.equal((await chooseCampaign({zone:z})).id,c.id);
+    run('UPDATE campaigns SET spent_today=1 WHERE id=?',[c.id]);assert.equal(await chooseCampaign({zone:z}),null);
+    run("UPDATE system_settings SET value='2000-01-01' WHERE key='daily_spend_date'");assert.equal((await chooseCampaign({zone:z})).id,c.id);assert.equal(one('SELECT spent_today FROM campaigns WHERE id=?',[c.id]).spent_today,0);
+    assert.equal(campaignDelivery(one('SELECT * FROM campaigns WHERE id=?',[c.id])).ready,true);
+    run("UPDATE campaigns SET status='paused'");
   });
   await t.test('owner house ads are restricted to selected sites and never move money',async()=>{
     const house=await api('/api/advertiser/campaigns',{token:admin,body:{name:'House promotion',destinationUrl:'https://example.com/house',headline:'Our sites',creativeType:'display',model:'CPM',cpm:2,budgetTotal:1,budgetDaily:1},status:201});

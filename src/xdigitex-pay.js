@@ -1,7 +1,7 @@
 import { config } from './config.js';
 
 const SUPPORTED_CURRENCIES=new Set(['KES','CDF','UGX','XOF','XAF','RWF','ZMW','SLE','USD']);
-const SUPPORTED_GATEWAYS=new Set(['card','safaricom','airtel','mobile','crypto']);
+const SUPPORTED_GATEWAYS=new Set(['card','mobile']);
 
 function requireConfigured(){
   if(!config.xdigitexPayApiKey) throw Object.assign(new Error('Xdigitex Pay is not configured'),{status:503});
@@ -10,7 +10,7 @@ function requireConfigured(){
 async function request(path,{method='GET',body}={}){
   requireConfigured();
   const r=await fetch(config.xdigitexPayBaseUrl+path,{
-    method,
+    method,signal:AbortSignal.timeout(15000),
     headers:{'X-API-Key':config.xdigitexPayApiKey,'Content-Type':'application/json','Accept':'application/json'},
     body:body?JSON.stringify(body):undefined
   });
