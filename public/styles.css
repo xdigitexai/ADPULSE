@@ -3,3 +3,4 @@
 
 .legal-page{max-width:860px;margin:0 auto;padding:35px 24px 70px}.legal-page .brand{margin-bottom:45px}.legal-page .card{margin-bottom:20px}.legal-page h1{font-size:38px}.table a.text-link{text-decoration:none}.kpi strong span{color:var(--muted)}
 .queue-list{display:grid;gap:0}.queue-item{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:18px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}.queue-item:first-child{padding-top:0}.queue-item:last-child{border-bottom:0;padding-bottom:0}.queue-item strong{font-size:13px}.queue-item small{display:block;font-size:10px;margin-top:4px}.queue-item .row{gap:8px}@media(min-width:601px){.table th{white-space:nowrap}}
+.section-title{flex-wrap:wrap}.section-title h2,.section-title h3{min-width:0;overflow-wrap:anywhere}.top>div{min-width:0}.top h1{overflow-wrap:anywhere}.dl>div{min-width:0}.queue-item>div{min-width:0;overflow-wrap:anywhere}
