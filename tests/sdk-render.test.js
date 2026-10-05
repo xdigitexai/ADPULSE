@@ -6,7 +6,7 @@ import vm from 'node:vm';
 const sdk=fs.readFileSync(new URL('../public/adpulse.js',import.meta.url),'utf8');
 async function fixture({type='display',visible=true,ratio=1}={}){
   let now=0;const timers=new Map(),calls=[],listeners={};let nextTimer=0;
-  const element=()=>({style:{},dataset:{},children:[],setAttribute(){},appendChild(n){this.children.push(n)},replaceChildren(n){this.children=[n]}});
+  const element=()=>({style:{},dataset:{},children:[],querySelector(){return null},setAttribute(){},appendChild(n){this.children.push(n)},replaceChildren(n){this.children=[n]}});
   const slot=element();slot.dataset.zone='fixture-zone';slot.dataset.adpulseFormat='inline';
   const store=new Map();const storage={getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v)};
   const document={currentScript:{src:'https://ads.example.test/adpulse.js'},documentElement:{},visibilityState:visible?'visible':'hidden',createElement:element,querySelectorAll:()=>slot.dataset.adpulseMounted?[]:[slot]};

@@ -5,6 +5,7 @@ import bcrypt from 'bcryptjs';
 import { nanoid } from 'nanoid';
 import { config } from './config.js';
 import { mirrorLedger } from './production-store.js';
+import {migrateSocial} from './social/schema.js';
 
 fs.mkdirSync(path.dirname(config.dbPath), { recursive: true });
 export const db = new Database(config.dbPath);
@@ -289,6 +290,7 @@ for(const row of db.prepare("SELECT id FROM sites WHERE seller_id IS NULL OR sel
   db.prepare('UPDATE sites SET seller_id=? WHERE id=?').run(`PUB-${nanoid(10).toUpperCase()}`,row.id);
 }
 
+migrateSocial(db);
 export function id(prefix='id') { return `${prefix}_${nanoid(16)}`; }
 export function one(sql, params=[]) { return db.prepare(sql).get(...params); }
 export function all(sql, params=[]) { return db.prepare(sql).all(...params); }
@@ -306,11 +308,12 @@ export function finalizeMaturePublisherEarnings(){
   return run("UPDATE ledger_entries SET status='available' WHERE type='PUBLISHER_EARNING' AND status='pending' AND created_at<=datetime('now','-24 hours')").changes;
 }
 
-export function addLedger({userId,eventId=null,type,amount,currency='USD',status='finalized',note=null}) {
+export function addLedger({userId,eventId=null,type,amount,currency='USD',status='finalized',note=null,deferMirror=false}) {
   const entry = { id:id('led'), userId, eventId, type, amount:Number(amount), currency, status, note };
   run('INSERT INTO ledger_entries(id,user_id,event_id,type,amount,currency,status,note) VALUES(?,?,?,?,?,?,?,?)',
     [entry.id,entry.userId,entry.eventId,entry.type,entry.amount,entry.currency,entry.status,entry.note]);
-  void mirrorLedger(entry).catch(()=>{});
+  if(deferMirror)queueMicrotask(()=>{const persisted=one('SELECT status FROM ledger_entries WHERE id=?',[entry.id]);if(persisted)void mirrorLedger({...entry,status:persisted.status}).catch(()=>{});});
+  else void mirrorLedger(entry).catch(()=>{});
   return entry;
 }
 

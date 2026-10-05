@@ -9,8 +9,8 @@ export async function enrichIp(ip){
   const reasons=[]; let risk=0;
   try{
     const [coreR,privacyR]=await Promise.all([
-      fetch(`https://api.ipinfo.io/lite/${encodeURIComponent(ip)}?token=${encodeURIComponent(config.ipinfoToken)}`),
-      fetch(`https://api.ipinfo.io/privacy/${encodeURIComponent(ip)}?token=${encodeURIComponent(config.ipinfoToken)}`)
+      fetch(`https://api.ipinfo.io/lite/${encodeURIComponent(ip)}?token=${encodeURIComponent(config.ipinfoToken)}`,{signal:AbortSignal.timeout(8000)}),
+      fetch(`https://api.ipinfo.io/privacy/${encodeURIComponent(ip)}?token=${encodeURIComponent(config.ipinfoToken)}`,{signal:AbortSignal.timeout(8000)})
     ]);
     const core=coreR.ok?await coreR.json():{};
     const privacy=privacyR.ok?await privacyR.json():{};
@@ -20,7 +20,7 @@ export async function enrichIp(ip){
     if(tor){risk+=70;reasons.push('tor');}
     if(hosting){risk+=35;reasons.push('hosting_network');}
     if(relay){risk+=15;reasons.push('relay');}
-    const value={source:'ipinfo',asn:core.asn||core.as_name||null,asnName:core.as_name||null,asnDomain:core.as_domain||null,asnType:core.as_type||null,vpn,proxy,tor,hosting,relay,risk,reasons};
+    const value={source:'ipinfo',privacyAvailable:privacyR.ok,countryAvailable:coreR.ok,country:core.country_code||null,asn:core.asn||core.as_name||null,asnName:core.as_name||null,asnDomain:core.as_domain||null,asnType:core.as_type||null,vpn,proxy,tor,hosting,relay,risk,reasons};
     cache.set(ip,{ts:Date.now(),value}); return value;
   }catch{
     return {source:'error',asn:null,vpn:false,proxy:false,tor:false,hosting:false,risk:0,reasons:['ip_intel_unavailable']};

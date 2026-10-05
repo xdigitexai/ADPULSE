@@ -81,3 +81,6 @@ The SDK requests a signed page-context classification, asks the decision engine 
 - ads.txt verification: publisher dashboard
 
 See `docs/ARCHITECTURE.md` and `docs/API.md`.
+
+The additive Social / Creator Network is documented in [SOCIAL-CREATORS.md](docs/SOCIAL-CREATORS.md),
+with implementation and verification details in [SOCIAL-BUILD-REPORT.md](docs/SOCIAL-BUILD-REPORT.md).

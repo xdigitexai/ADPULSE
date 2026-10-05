@@ -20,6 +20,19 @@ services:
       - upload_data:/app/public/uploads
       # SQLite remains the application's authoritative operational store.
       - app_data:/app/data
+  social-worker:
+    build: .
+    command: ["npm", "run", "worker"]
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      app: { condition: service_healthy }
+    stop_grace_period: 16m
+    mem_limit: 2g
+    cpus: 2
+    volumes:
+      - upload_data:/app/public/uploads
+      - app_data:/app/data
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped

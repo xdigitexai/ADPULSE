@@ -22,6 +22,7 @@ import { classifyPageForZone } from './page-context.js';
 import { hashIp } from './fraud.js';
 import { fetchPublisherPath, safeFetchUrl } from './safe-fetch.js';
 import { updateAudienceSignal, isSensitiveInterest } from './audience-engine.js';
+import {registerSocial,creatorConversionHook} from './social/routes.js';
 
 const storeState=await initProductionStores().catch(err=>{console.error('Production stores unavailable:',err.message);return {postgres:false,redis:false,clickhouse:false}});
 if(config.productionStoresRequired && (!storeState.postgres || !storeState.redis || !storeState.clickhouse)) throw new Error('PRODUCTION_STORES_REQUIRED is enabled but one or more production stores are unavailable');
@@ -492,7 +493,7 @@ app.post('/collect/conversion',(req,res)=>{
   res.status(201).json({accepted:true,id:cid});
 });
 
-app.post('/api/conversions',auth('advertiser'),(req,res)=>{
+app.post('/api/conversions',auth('advertiser'),creatorConversionHook,(req,res)=>{
   const schema=z.object({campaignId:z.string(),requestId:z.string().optional(),eventName:z.string().min(1).max(64),value:z.number().min(0).default(0),currency:z.string().default('USD'),externalId:z.string().max(120).optional(),metadata:z.record(z.any()).optional().default({})});
   const d=schema.parse(req.body);
   const campaign=one('SELECT * FROM campaigns WHERE id=?',[d.campaignId]); requireOwner(campaign,req.user.id,'advertiser_id');
@@ -693,6 +694,7 @@ app.get('/api/admin/fraud',auth('admin'),(req,res)=>res.json(all(`SELECT publish
   ROUND(AVG(risk_score),2) avg_risk
   FROM ad_events GROUP BY publisher_id ORDER BY invalid_rate DESC LIMIT 100`)));
 
+registerSocial(app);
 app.use((err,req,res,next)=>{
   console.error(err);
   if(err?.name==='ZodError') return res.status(400).json({error:'Validation failed',details:err.issues});
