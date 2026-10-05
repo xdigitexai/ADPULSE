@@ -590,7 +590,7 @@ app.get('/r/click',wrap(async(req,res)=>{
 
 app.post('/api/admin/users/:id/login-as',auth('admin'),(req,res)=>{
   if(req.user.supportSession)return res.status(403).json({error:'Nested support sessions are not allowed'});
-  const user=one('SELECT id,email,name,role,status,kyc_status,phone,country FROM users WHERE id=?',[req.params.id]);
+  const user=one('SELECT id,email,name,role,status,kyc_status,phone,country,currency FROM users WHERE id=?',[req.params.id]);
   if(!user||user.role==='admin'||user.status!=='active')return res.status(400).json({error:'Choose an active non-admin account'});
   const sessionId=id('support');run("INSERT INTO admin_support_sessions(id,admin_id,user_id,expires_at) VALUES(?,?,?,datetime('now','+15 minutes'))",[sessionId,req.user.id,user.id]);
   res.json(issueSupportToken(user,req.user,sessionId));

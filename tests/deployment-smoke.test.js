@@ -285,6 +285,7 @@ test('production deployment smoke: boot, uploads, accounts, accounting and provi
     const localAdv=await api('/api/auth/register',{body:{role:'advertiser',currency:'KES',email:'local-adv@example.test',name:'Local advertiser',password:'Smoke-password-2026!'},status:201});
     const localPub=await api('/api/auth/register',{body:{role:'publisher',currency:'KES',email:'local-pub@example.test',name:'Local publisher',password:'Smoke-password-2026!'},status:201});
     assert.equal(localAdv.user.currency,'KES');
+    const localSupport=await api('/api/admin/users/'+localPub.user.id+'/login-as',{token:admin,body:{}});assert.equal(localSupport.user.currency,'KES');
     await api('/api/payments/initiate',{token:localAdv.token,body:{amount:100,currency:'USD',gateway:'card'},status:400});
     await api('/api/advertiser/campaigns',{token:localAdv.token,body:{name:'Wrong currency',headline:'Wrong currency',destinationUrl:'https://example.test',model:'CPC',cpc:1,currency:'USD',budgetTotal:10,budgetDaily:1},status:400});
     const payment=await api('/api/payments/initiate',{token:localAdv.token,body:{amount:100,currency:'KES',gateway:'mobile',phone:'254700000000'},status:201});payments.get(payment.reference).status='completed';
