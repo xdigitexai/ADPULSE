@@ -118,7 +118,8 @@ app.get('/api/dashboard',auth(),(req,res)=>{
     users:one('SELECT COUNT(*) n FROM users').n,
     sites:one('SELECT COUNT(*) n FROM sites').n,
     campaigns:one('SELECT COUNT(*) n FROM campaigns').n,
-    spend:one('SELECT COALESCE(SUM(bill_amount),0) n FROM ad_events WHERE valid=1').n,
+    reportingCurrency:'USD',
+    spend:reportAmount('USD',all('SELECT SUM(e.bill_amount) amount,c.currency FROM ad_events e JOIN campaigns c ON c.id=e.campaign_id WHERE e.valid=1 GROUP BY c.currency')),
     pendingSites:all("SELECT s.*,u.email publisher_email FROM sites s JOIN users u ON u.id=s.publisher_id WHERE s.status IN ('pending_review','pending_verification') ORDER BY s.created_at DESC LIMIT 20"),
     pendingCampaigns:all("SELECT c.*,u.email advertiser_email FROM campaigns c JOIN users u ON u.id=c.advertiser_id WHERE c.status='pending_review' ORDER BY c.created_at DESC LIMIT 20")
   });

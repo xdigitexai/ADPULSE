@@ -294,6 +294,12 @@ test('production deployment smoke: boot, uploads, accounts, accounting and provi
     addLedger({userId:localPub.user.id,type:'TEST_FIXTURE',amount:2000,currency:'KES'});
     await api('/api/publisher/withdrawals',{token:localPub.token,body:{amount:500,currency:'UGX',accountNumber:'254700000000'},status:400});
     await api('/api/publisher/withdrawals',{token:localPub.token,body:{amount:500,currency:'KES',accountNumber:'254700000000'},status:201});assert.equal(balanceFor(localPub.user.id,'KES'),1485);
+    const rates={USD:1,KES:130,UGX:3700,CDF:2800,XOF:600,XAF:600,RWF:1400,ZMW:25,SLE:23};run("INSERT INTO system_settings(key,value) VALUES('account_currency_rates',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[JSON.stringify({timestamp:Math.floor(Date.now()/1000),nextUpdate:Math.floor(Date.now()/1000)+86400,rates})]);
+    const before=(await api('/api/dashboard',{token:admin})).spend;
+    const localCampaign=await api('/api/advertiser/campaigns',{token:localAdv.token,body:{name:'Local report fixture',headline:'Local report',destinationUrl:'https://example.test',model:'CPC',cpc:13,currency:'KES',budgetTotal:100,budgetDaily:20},status:201});
+    // Isolated reporting fixture: one observed local-currency event, no customer transaction.
+    run("INSERT INTO ad_events(id,request_id,event_type,campaign_id,publisher_id,valid,bill_amount) VALUES('local-report-event','local-report-request','click',?,?,1,13)",[localCampaign.id,localPub.user.id]);
+    const report=await api('/api/dashboard',{token:admin});assert.equal(report.reportingCurrency,'USD');assert.ok(Math.abs(report.spend-before-.1)<.000001);
   });
 
 });
