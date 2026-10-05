@@ -72,7 +72,7 @@
     box.style.cssText='font-family:Arial,sans-serif;border:1px solid #e6e8ec;border-radius:10px;overflow:hidden;background:#fff;color:#111;max-width:100%;position:relative;'+(c.width?'width:'+c.width+'px;':'')+(c.height?'min-height:'+c.height+'px;':'');
     let media='';
     if(c.creativeType==='video'&&c.videoUrl){
-      media='<div style="position:relative;background:#000"><video src="'+esc(c.videoUrl)+'" playsinline controls style="width:100%;display:block;background:#000"></video></div>';
+      media='<div style="position:relative;background:#000"><video src="'+esc(c.videoUrl)+'" muted playsinline controls style="width:100%;display:block;background:#000"></video></div>';
     }else if(c.imageUrl){
       media='<img alt="" src="'+esc(c.imageUrl)+'" style="width:100%;display:block;max-height:'+(c.height||260)+'px;object-fit:cover">';
     }
@@ -115,6 +115,7 @@
 
       el.dataset.adpulse='filled';
       const root=el.attachShadow?(el.shadowRoot||el.attachShadow({mode:'open'})):el;root.replaceChildren(renderCreative(ad.creative,ad));
+      const video=root.querySelector('video');if(video){const {enableVideoPlayback}=await import(base+'/video-playback.js');enableVideoPlayback(video);}
       sendEvent(ad.token,'render',{pageUrl:location.href,refreshCount});
 
       let visibleSince=0,viewTimer=0,currentRatio=0,refreshTimer=0;
