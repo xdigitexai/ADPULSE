@@ -82,6 +82,13 @@ app.post('/api/auth/register',wrap(async(req,res)=>{const result=await register(
 app.post('/api/auth/login',wrap(async(req,res)=>{const result=await login(req.body.email,req.body.password);run("INSERT INTO account_ip_history(id,user_id,ip_hash) VALUES(?,?,?) ON CONFLICT(user_id,ip_hash) DO UPDATE SET last_seen=CURRENT_TIMESTAMP",[id('aip'),result.user.id,hashIp(req.ip)]);res.json(result)}));
 app.get('/api/auth/google/config',(req,res)=>res.json({clientId:config.googleClientId||null}));
 app.post('/api/auth/google',wrap(async(req,res)=>{const role=['advertiser','publisher'].includes(req.body?.role)?req.body.role:null;const result=await loginWithGoogle(req.body?.credential,role,req.body?.currency||'USD');if(result.needsRole)return res.json(result);run("INSERT INTO account_ip_history(id,user_id,ip_hash) VALUES(?,?,?) ON CONFLICT(user_id,ip_hash) DO UPDATE SET last_seen=CURRENT_TIMESTAMP",[id('aip'),result.user.id,hashIp(req.ip)]);res.json(result)}));
+app.post('/api/advertiser/api-keys',auth('advertiser'),(req,res)=>{
+ const name=z.string().min(2).max(80).parse(req.body.name),raw='adp_live_'+crypto.randomBytes(32).toString('hex'),keyId=id('key');
+ run('INSERT INTO advertiser_api_keys(id,user_id,name,key_hash,key_prefix) VALUES(?,?,?,?,?)',[keyId,req.user.id,name,crypto.createHash('sha256').update(raw).digest('hex'),raw.slice(0,16)]);
+ res.status(201).json({id:keyId,key:raw,prefix:raw.slice(0,16)});
+});
+app.get('/api/advertiser/api-keys',auth('advertiser'),(req,res)=>res.json(all('SELECT id,name,key_prefix,created_at,revoked_at FROM advertiser_api_keys WHERE user_id=?',[req.user.id])));
+app.post('/api/advertiser/api-keys/:id/revoke',auth('advertiser'),(req,res)=>{run('UPDATE advertiser_api_keys SET revoked_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?',[req.params.id,req.user.id]);res.json({ok:true})});
 app.get('/api/me',auth(),(req,res)=>res.json({user:req.user,balance:balanceFor(req.user.id,req.user.currency||'USD'),balances:preferredBalances(req.user.id)}));
 
 app.get('/api/dashboard',auth(),(req,res)=>{
@@ -351,7 +358,7 @@ app.post('/api/payments/initiate',auth('advertiser'),wrap(async(req,res)=>{
     phone:z.string().optional(),
     firstName:z.string().max(80).optional(),
     lastName:z.string().max(80).optional(),
-    description:z.string().max(180).optional()
+    description:z.string().max(180).optional(),callbackUrl:z.string().url().optional()
   });
   const d=schema.parse(req.body), currency=assertAccountCurrency(req.user,d.currency), gateway=assertGateway(d.gateway);
   if(!['mobile','card'].includes(gateway))return res.status(400).json({error:'Choose Mobile Money Africa or Card'});
@@ -363,7 +370,7 @@ app.post('/api/payments/initiate',auth('advertiser'),wrap(async(req,res)=>{
     first_name:d.firstName||req.user.name?.split(' ')[0]||'ADPulse',
     last_name:d.lastName||req.user.name?.split(' ').slice(1).join(' ')||'User',
     description:d.description||'ADPulse advertiser wallet deposit',
-    callback_url:config.appUrl+'/payment-return',
+    callback_url:req.integrationKey&&d.callbackUrl&&new URL(d.callbackUrl).origin==='https://getadpulse.site'?d.callbackUrl:config.appUrl+'/payment-return',
     webhook_url:config.appUrl+'/webhooks/xdigitex-pay'
   };
   const result=await xdigitexPay.initiatePayment(payload);

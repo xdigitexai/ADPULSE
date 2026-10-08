@@ -337,3 +337,6 @@ export async function ensureAdmin() {
   run('INSERT INTO users(id,email,password_hash,role,name,status) VALUES(?,?,?,?,?,?)',
     [id('usr'),config.adminEmail.toLowerCase(),hash,'admin','ADPulse Admin','active']);
 }
+
+// Server-side advertiser integration keys, stored as hashes only.
+db.exec(`CREATE TABLE IF NOT EXISTS advertiser_api_keys(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),name TEXT NOT NULL,key_hash TEXT NOT NULL UNIQUE,key_prefix TEXT NOT NULL,revoked_at TEXT,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`);

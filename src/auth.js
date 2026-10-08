@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
@@ -43,6 +44,16 @@ export function issueSupportToken(user,actor,sessionId){return {token:jwt.sign({
 export function auth(requiredRole=null){
   return (req,res,next)=>{
     try{
+      const apiKey=String(req.headers['x-api-key']||'');
+      if(apiKey){
+        const key=one('SELECT * FROM advertiser_api_keys WHERE key_hash=? AND revoked_at IS NULL',[crypto.createHash('sha256').update(apiKey).digest('hex')]);
+        if(!key)return res.status(401).json({error:'Invalid API key'});
+        const allowed=(req.method==='GET'&&['/api/me','/api/advertiser/campaigns','/api/payments/gateways'].includes(req.path))||(req.method==='POST'&&['/api/advertiser/campaigns','/api/payments/initiate'].includes(req.path))||(req.method==='GET'&&/^\/api\/payments\/[^/]+\/status$/.test(req.path));
+        if(!allowed||requiredRole==='admin')return res.status(403).json({error:'API key scope does not permit this action'});
+        const user=one('SELECT id,email,role,name,status,kyc_status,phone,country,currency FROM users WHERE id=?',[key.user_id]);
+        if(!user||user.status!=='active'||user.role!=='advertiser')return res.status(401).json({error:'Account unavailable'});
+        req.user=user;req.integrationKey=key.id;return next();
+      }
       const raw=req.headers.authorization||'';
       if(!raw.startsWith('Bearer ')) return res.status(401).json({error:'Authentication required'});
       const payload=jwt.verify(raw.slice(7),config.jwtSecret);

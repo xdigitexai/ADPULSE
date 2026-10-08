@@ -7,3 +7,16 @@ data/
 .DS_Store
 npm-debug.log*
 public/uploads/creators/
+.next/
+dist/
+build/
+.env.*
+*.env
+*.pem
+*.key
+id_rsa*
+*.p12
+config.local.php
+*.bak
+*.bak.*
+*.log
